@@ -33,11 +33,12 @@ HERMES_HOME=$(mktemp -d) PYTHONPATH=/tmp/host \
 ```
 
 - [ ] `Validation passed.`
-- [ ] Every warning is understood and written down. This plugin has four *private core
-      imports* warnings (`agent.redact`, `agent.file_safety`, `tools.file_tools_paths`,
-      `hermes_cli.plugins.VALID_HOOKS`). Each is guarded so a rename degrades instead of
-      crashing, and each is there because the public surface does not expose it (see
-      "Open questions" in the lane report). Do not silence them by deleting the guard.
+- [ ] Every warning is understood and written down. This plugin has three *private core
+      imports* warnings (`agent.redact.redact_sensitive_text`,
+      `agent.file_safety.is_write_denied`, `hermes_cli.plugins.VALID_HOOKS`). Each is guarded
+      so a rename degrades instead of crashing, and each is there because the public
+      surface does not expose it (see "Open questions" in the lane report). Do not
+      silence them by deleting the guard.
 - [ ] `python -c "from hermes_cli.plugin_dev import doctor_plugin; ..."` reports the three
       declared hooks registered and zero findings.
 
