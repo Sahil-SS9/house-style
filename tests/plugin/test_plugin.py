@@ -360,3 +360,14 @@ def test_commands_work_in_a_remote_session_directory(host_factory):
     out = run(host, "status")
     assert "House style — /workspace" in out, out
     assert "context file:" in out
+
+
+def test_capture_uses_the_directory_the_session_reported(host: FakeHost):
+    """A hook may run without the session's context; the session's own answer wins."""
+    make_repo(host)
+    host.ctx.set_cwd(host.repo)
+    host.ctx.hooks["on_session_start"](session_id="s1")
+    host.ctx.set_cwd(Path("/a/directory/only/the/hook/sees"))
+    write_file(host, "pkg/module.py", "value = 1\n")
+    signals = host.plugin.engine().scan(host.repo).signals
+    assert [signal.path for signal in signals] == ["pkg/module.py"]

@@ -55,6 +55,13 @@ _engine_lock = threading.Lock()
 _ctx: Any = None
 _last_scan: dict[str, float] = {}
 
+#: The working directory each session reported when it started. A ``post_tool_call``
+#: hook runs without the session's own context on some builds, where
+#: ``ctx.session_cwd()`` then answers with something other than the session's directory;
+#: remembering what the session itself reported keeps capture keyed the same way the
+#: commands are.
+_session_cwds: dict[str, str] = {}
+
 
 # ---------------------------------------------------------------------------
 # host seams — public ctx methods only
@@ -79,8 +86,16 @@ def _host_redact() -> Any:
     return redact
 
 
-def _session_cwd() -> Path:
-    """The working directory this session was started in."""
+def _session_cwd(session_id: str = "") -> Path:
+    """The working directory this session was started in.
+
+    ``session_id`` is preferred when we have seen that session report its own directory;
+    inside a hook the host may not have the session's context, and its answer would then
+    be the launch directory instead.
+    """
+    remembered = _session_cwds.get(session_id or "")
+    if remembered:
+        return Path(remembered)
     try:
         raw = _ctx.session_cwd() if _ctx is not None else ""
     except Exception:
@@ -90,17 +105,40 @@ def _session_cwd() -> Path:
     return Path(os.getcwd())
 
 
-def _read_remote(raw_path: str, task_id: str) -> str | None:
-    """Read a file through the tool surface, which is what reaches a remote backend."""
+def _remember_cwd(session_id: str) -> None:
+    """Record the session's own directory while its context is available."""
+    try:
+        raw = _ctx.session_cwd() if _ctx is not None else ""
+    except Exception:
+        return
+    if isinstance(raw, str) and raw.strip() and session_id:
+        if len(_session_cwds) > 500:
+            _session_cwds.clear()
+        _session_cwds[session_id] = raw.strip()
+
+
+def _read_remote(raw_path: str, task_id: str, abs_path: str = "") -> str | None:
+    """Read a file through the tool surface, which is what reaches a remote backend.
+
+    The path as the tool saw it is tried first, then the absolute path, because a
+    relative path is resolved against the tool's own working directory and that is not
+    always the one this process thinks it is.
+    """
     dispatch = getattr(_ctx, "dispatch_tool", None)
     if not callable(dispatch):
         return None
-    try:
-        raw = dispatch("read_file", {"path": raw_path, "limit": TOOL_READ_LINES})
-    except Exception:
-        logger.debug("house-style: read_file dispatch failed", exc_info=True)
-        return None
-    return _strip_line_numbers(raw)
+    for candidate in (raw_path, abs_path):
+        if not candidate:
+            continue
+        try:
+            raw = dispatch("read_file", {"path": candidate, "limit": TOOL_READ_LINES})
+        except Exception:
+            logger.debug("house-style: read_file dispatch failed", exc_info=True)
+            continue
+        text = _strip_line_numbers(raw)
+        if text is not None:
+            return text
+    return None
 
 
 def _is_numbered(line: str) -> bool:
@@ -143,15 +181,15 @@ def engine() -> Engine:
 # ---------------------------------------------------------------------------
 # paths
 # ---------------------------------------------------------------------------
-def _resolve_tool_path(raw: str) -> Path:
+def _resolve_tool_path(raw: str, session_id: str = "") -> Path:
     """A tool's ``path`` argument, resolved against the session working directory."""
     candidate = Path(raw).expanduser()
     if candidate.is_absolute():
         return candidate
-    return _session_cwd() / candidate
+    return _session_cwd(session_id) / candidate
 
 
-def _repo_root(path: Path) -> Path | None:
+def _repo_root(path: Path, session_id: str = "") -> Path | None:
     """Repository root for a path, or the session's logical root on a remote backend.
 
     A file the host cannot see lives on a backend, where ``.git`` is not visible from
@@ -168,7 +206,7 @@ def _repo_root(path: Path) -> Path | None:
         visible = False
     if visible:
         return None
-    cwd = _session_cwd()
+    cwd = _session_cwd(session_id)
     return find_repo_root(cwd) or cwd
 
 
@@ -222,8 +260,8 @@ def _capture_tool_call(
     for raw_path, blocks in _blocks_for(tool, args):
         if not blocks:
             continue
-        path = _resolve_tool_path(raw_path)
-        root = _repo_root(path)
+        path = _resolve_tool_path(raw_path, session_id)
+        root = _repo_root(path, session_id)
         if root is None:
             logger.debug("house-style: %s is outside a git repository", raw_path)
             continue
@@ -245,9 +283,9 @@ def _capture_tool_call(
             logger.debug("house-style: not captured: %s", capture.reason)
 
 
-def _maybe_scan(force: bool = False) -> None:
+def _maybe_scan(force: bool = False, session_id: str = "") -> None:
     """Classify stored blocks for the current repository, at most every 30 s."""
-    cwd = _session_cwd()
+    cwd = _session_cwd(session_id)
     root = find_repo_root(cwd) or cwd
     now = time.monotonic()
     key = str(root)
@@ -288,7 +326,8 @@ def on_post_tool_call(
 def on_session_start(session_id: str = "", **kwargs: Any) -> None:
     """New session: catch up on what the user did with earlier agent edits."""
     try:
-        _maybe_scan(force=True)
+        _remember_cwd(session_id)
+        _maybe_scan(force=True, session_id=session_id)
     except Exception:
         logger.debug("house-style: session-start scan failed", exc_info=True)
     return None
@@ -322,8 +361,7 @@ def _relative_target(root: Path, target: Path) -> str:
         return target.as_posix()
 
 
-def _learn(root: Path, eng: Engine, confirm: bool) -> str:
-    cwd = _session_cwd()
+def _learn(root: Path, eng: Engine, confirm: bool, cwd: Path) -> str:
     if confirm:
         target = eng.confirm(root, cwd)
         if target is None:
@@ -364,8 +402,8 @@ def _learn(root: Path, eng: Engine, confirm: bool) -> str:
     )
 
 
-def _reset(root: Path, eng: Engine, confirmed: bool) -> str:
-    signals, kept, state = eng.reset(root, confirmed=confirmed, cwd=_session_cwd())
+def _reset(root: Path, eng: Engine, confirmed: bool, cwd: Path) -> str:
+    signals, kept, state = eng.reset(root, confirmed=confirmed, cwd=cwd)
     if state == "planned":
         return (
             f"Would clear {signals} stored edit(s) and every learned rule"
@@ -379,14 +417,14 @@ def _reset(root: Path, eng: Engine, confirmed: bool) -> str:
     )
 
 
-def _command_root() -> Path | None:
+def _command_root(session_id: str = "") -> Path | None:
     """Repository root for command output, or the session's logical root remotely.
 
     A Docker or SSH session's working directory does not exist on this host, so the
     usual ``.git`` walk cannot find anything; the session directory itself is then the
     root, which is what capture keys those signals by too.
     """
-    cwd = _session_cwd()
+    cwd = _session_cwd(session_id)
     root = find_repo_root(cwd)
     if root is not None:
         return root
@@ -412,8 +450,11 @@ def handle_command(raw_args: str = "", **kwargs: Any) -> str:
     elif sub == "reset" and rest.lower() == "confirm":
         sub, rest = "reset-confirm", ""
 
-    cwd = _session_cwd()
-    root = _command_root()
+    session_id = str(kwargs.get("session_id") or "")
+    if session_id:
+        _remember_cwd(session_id)
+    cwd = _session_cwd(session_id)
+    root = _command_root(session_id)
     if root is None:
         return (
             "house-style: this working directory is not inside a git repository, so there "
@@ -437,13 +478,13 @@ def handle_command(raw_args: str = "", **kwargs: Any) -> str:
         if sub == "learn":
             if not eng.capture_enabled:
                 return f"house-style: nothing was learned — {NO_REDACTOR}"
-            return _learn(root, eng, confirm=False)
+            return _learn(root, eng, confirm=False, cwd=cwd)
         if sub == "learn-confirm":
-            return _learn(root, eng, confirm=True)
+            return _learn(root, eng, confirm=True, cwd=cwd)
         if sub == "reset":
-            return _reset(root, eng, confirmed=False)
+            return _reset(root, eng, confirmed=False, cwd=cwd)
         if sub == "reset-confirm":
-            return _reset(root, eng, confirmed=True)
+            return _reset(root, eng, confirmed=True, cwd=cwd)
         if sub == "off":
             eng.store.set_off(eng.store.register_repo(root), True)
             return f"house-style is off for {root.name}: new edits are not recorded."

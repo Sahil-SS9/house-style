@@ -109,11 +109,13 @@ class Engine:
         return self.redact is not None
 
     # -- reading ----------------------------------------------------------
-    def _read_remote(self, raw_path: str, task_id: str) -> str | None:
+    def _read_remote(self, raw_path: str, task_id: str, file_path: Path) -> str | None:
         if self.read_remote is None:
             return None
         try:
-            return self.read_remote(raw_path, task_id)
+            return self.read_remote(raw_path, task_id, str(file_path))
+        except TypeError:
+            return self.read_remote(raw_path, task_id)  # a two-argument reader
         except Exception:
             return None
 
@@ -123,7 +125,7 @@ class Engine:
             return file_path.read_text(encoding="utf-8", errors="replace"), READ_HOST
         except OSError:
             pass
-        text = self._read_remote(raw_path, task_id)
+        text = self._read_remote(raw_path, task_id, file_path)
         if text is not None:
             return text, READ_TOOL
         return None, ""
