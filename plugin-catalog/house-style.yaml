@@ -1,6 +1,6 @@
 name: house-style
 repo: https://github.com/Sahil-SS9/house-style
-sha: PINNED_AT_RELEASE
+sha: ccf2cb2d476f9d8132de7925daf3f55d6308c9c5
 version: "0.2.0"
 description: >-
   Learns a project's house style from how you correct the agent's edits. Every
