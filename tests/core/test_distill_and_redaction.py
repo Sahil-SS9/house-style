@@ -107,3 +107,36 @@ def test_redact_lines_preserves_line_count_for_single_line_secrets():
     assert len(redacted) == 2
     assert "sk-abcdefghijkl" not in redacted[0]
     assert redacted[1] == "other line"
+
+
+# -- parsing the model's reply -----------------------------------------------
+def test_parse_response_accepts_numbered_and_bulleted_lists():
+    reply = (
+        "Here is the merged list:\n\n"
+        "1. Prefer pathlib over os.path (4 edits)\n"
+        "2) Return early instead of nesting (2 edits)\n"
+        "- Use en-GB spelling in user-facing strings (2 edits)\n"
+        "* Keep imports at the top (1 edit)\n"
+    )
+    assert distill.parse_response(reply) == [
+        "Prefer pathlib over os.path (4 edits)",
+        "Return early instead of nesting (2 edits)",
+        "Use en-GB spelling in user-facing strings (2 edits)",
+        "Keep imports at the top (1 edit)",
+    ]
+
+
+def test_parse_response_drops_prose_headings_and_fences():
+    reply = "## Merged preferences\n```\n1. Prefer dataclasses for records (3 edits)\n```\nThat is all.\n"
+    assert distill.parse_response(reply) == ["Prefer dataclasses for records (3 edits)"]
+
+
+def test_parse_response_deduplicates_and_caps():
+    reply = "\n".join(f"{index}. Same rule (1 edit)" for index in range(1, 6))
+    assert distill.parse_response(reply) == ["Same rule (1 edit)"]
+    many = "\n".join(f"{index}. Rule number {index} (1 edit)" for index in range(1, 40))
+    assert len(distill.parse_response(many)) == 12
+
+
+def test_parse_response_rejects_a_reply_with_no_list():
+    assert distill.parse_response("I could not find a pattern in these examples.") == []

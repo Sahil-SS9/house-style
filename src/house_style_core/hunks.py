@@ -69,16 +69,32 @@ def _occurrences(haystack: Sequence[str], needle: str, *, limit: int = _MAX_ANCH
 
 def find_exact(haystack: Sequence[str], block: Sequence[str]) -> Match | None:
     """First verbatim occurrence of *block* in *haystack*."""
-    if not block or len(block) > len(haystack):
+    positions = find_all_exact(haystack, block, limit=1)
+    if not positions:
         return None
+    start = positions[0]
+    return Match(start, list(haystack[start : start + len(block)]), 1.0, "exact")
+
+
+def find_all_exact(haystack: Sequence[str], block: Sequence[str], *, limit: int = 200) -> list[int]:
+    """Every verbatim occurrence of *block*, in file order.
+
+    ``replace_all`` produces one block per replaced occurrence, so capture needs them
+    all rather than the first.
+    """
+    if not block or len(block) > len(haystack):
+        return []
     head = _norm(block[0])
     span = len(block)
-    for index, line in enumerate(haystack[: len(haystack) - span + 1]):
-        if _norm(line) != head:
+    starts: list[int] = []
+    for index in range(len(haystack) - span + 1):
+        if _norm(haystack[index]) != head:
             continue
         if _same(haystack[index : index + span], block):
-            return Match(index, list(haystack[index : index + span]), 1.0, "exact")
-    return None
+            starts.append(index)
+            if len(starts) >= limit:
+                break
+    return starts
 
 
 def _fence(lines: Sequence[str], *, from_end: bool) -> tuple[str | None, int]:
@@ -274,7 +290,19 @@ def classify_text(text: str | None, signal: Signal) -> Verdict:
         return base
 
     haystack = text.splitlines()
-    match = locate(haystack, signal)
+
+    if signal.occurrences > 1:
+        # A replace_all edit produced one signal per identical occurrence. An exact
+        # match on its own would always land on the first one, so: if the ordinal's
+        # copy is still there verbatim it was kept; otherwise locate this occurrence
+        # by its own fences (which differ per occurrence) and judge that region.
+        positions = find_all_exact(haystack, signal.hunk)
+        if len(positions) >= signal.occurrence:
+            return Verdict(signal.id, signal.path, KEPT, note=f"occurrence {signal.occurrence}")
+        match = find_anchored(haystack, signal) or find_window(haystack, signal.hunk)
+    else:
+        match = locate(haystack, signal)
+
     if match is None:
         base.before = list(signal.hunk)
         base.note = "block no longer present"

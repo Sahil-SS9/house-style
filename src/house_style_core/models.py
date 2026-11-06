@@ -2,11 +2,10 @@
 
 Two families live here:
 
-* :class:`Signal` — one agent edit, captured straight after the tool call. It holds
-  the block of lines the agent introduced plus the lines either side of it, so the
-  same edit can be located again after unrelated edits move it.
-* :class:`Verdict` — what the user did with that edit afterwards: kept, edited or
-  reverted, with a minimal before/after pair for the edited case.
+* :class:`Signal` — one block of lines the agent introduced, captured straight after
+  the tool call, together with the lines either side of it so it can be found again
+  after unrelated edits move it.
+* :class:`Verdict` — what the user did with that block: kept, edited or reverted.
 
 Every stored string is already redacted by the caller (see ``redaction``); nothing in
 this module re-interprets content.
@@ -20,12 +19,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 KEPT = "kept"
 EDITED = "edited"
 REVERTED = "reverted"
 STATUSES = (KEPT, EDITED, REVERTED)
+
+#: How a captured file's text was obtained: read on the host, or through the tool
+#: surface because the file lives on a remote backend.
+READ_HOST = "host-disk"
+READ_TOOL = "tool-surface"
 
 
 def utc_now() -> str:
@@ -34,18 +38,18 @@ def utc_now() -> str:
 
 
 def content_hash(text: str) -> str:
-    """SHA-256 of the exact text the agent wrote (UTF-8, newlines normalised)."""
+    """SHA-256 of the exact text the agent wrote (UTF-8)."""
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
 
 
 def new_signal_id() -> str:
-    """Short opaque id: the timestamp plus randomness, no content or path in it."""
+    """Short opaque id: a hash of time and object identity, no content or path in it."""
     return hashlib.sha256(f"{utc_now()}:{id(object())}".encode()).hexdigest()[:16]
 
 
 @dataclass
 class Signal:
-    """One captured agent edit."""
+    """One captured block."""
 
     id: str
     ts: str
@@ -59,6 +63,9 @@ class Signal:
     start_line: int = 0
     total_lines: int = 0
     size: int = 0
+    read_via: str = READ_HOST
+    occurrence: int = 1
+    occurrences: int = 1
     session_id: str = ""
     turn_id: str = ""
     v: int = SCHEMA_VERSION
@@ -78,6 +85,9 @@ class Signal:
             "start_line": self.start_line,
             "total_lines": self.total_lines,
             "size": self.size,
+            "read_via": self.read_via,
+            "occurrence": self.occurrence,
+            "occurrences": self.occurrences,
             "session_id": self.session_id,
             "turn_id": self.turn_id,
         }
@@ -99,6 +109,9 @@ class Signal:
             start_line=int(data.get("start_line") or 0),
             total_lines=int(data.get("total_lines") or 0),
             size=int(data.get("size") or 0),
+            read_via=str(data.get("read_via") or READ_HOST),
+            occurrence=int(data.get("occurrence") or 1),
+            occurrences=int(data.get("occurrences") or 1),
             session_id=str(data.get("session_id", "")),
             turn_id=str(data.get("turn_id", "")),
             v=int(data.get("v") or 1),
@@ -107,7 +120,7 @@ class Signal:
 
 @dataclass
 class Verdict:
-    """What happened to one captured edit."""
+    """What happened to one captured block."""
 
     signal_id: str
     path: str

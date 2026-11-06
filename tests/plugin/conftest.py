@@ -1,9 +1,9 @@
-"""A fake Hermes host, so the adapter can be driven without a Hermes checkout.
+"""A fake Hermes host for the adapter.
 
-Every host module the adapter touches is replaced with a small stub in ``sys.modules``
-(restored automatically after each test). The stubs model the documented seams: the
-plugin-data directory, the redactor, the protected-path predicate, the agent working
-directory, the tool-path resolver and ``VALID_HOOKS``.
+Everything the adapter needs from Hermes now comes through ``ctx`` (``redact_text``,
+``session_cwd``, ``dispatch_tool`` and ``llm``) plus the host's plugin-data directory,
+so this harness is small on purpose: if an adapter change needs a host module here, it
+has reached into Hermes internals and should not have.
 """
 
 from __future__ import annotations
@@ -36,8 +36,6 @@ class FakeLlmResult:
 
 
 class FakeLlm:
-    """Records calls and returns a scripted reply."""
-
     def __init__(self, reply: str) -> None:
         self.reply = reply
         self.calls: list[dict[str, Any]] = []
@@ -48,13 +46,26 @@ class FakeLlm:
 
 
 class FakeCtx:
-    def __init__(self, *, settings: dict[str, Any] | None = None, reply: str = "") -> None:
+    """The documented plugin surface, as far as house-style uses it."""
+
+    def __init__(
+        self,
+        *,
+        reply: str = "",
+        cwd: Path | None = None,
+        redactor: Callable[[str], str] | None = None,
+        remote: dict[str, str] | None = None,
+    ) -> None:
         self.hooks: dict[str, Callable] = {}
         self.commands: dict[str, dict[str, Any]] = {}
-        self.tools: dict[str, Any] = {}
-        self.settings = settings or {}
         self.llm = FakeLlm(reply)
+        self._cwd = str(cwd or "")
+        self.redactor = redactor
+        self.remote = dict(remote or {})
+        self.redact_calls: list[str] = []
+        self.tool_calls: list[tuple[str, dict]] = []
 
+    # -- hooks, commands, model -----------------------------------------
     def register_hook(self, name, callback, **_kwargs):
         self.hooks[name] = callback
         return None
@@ -63,12 +74,29 @@ class FakeCtx:
         self.commands[name] = {"handler": handler, "description": description, "args_hint": args_hint}
         return None
 
-    def register_tool(self, name, toolset, schema, handler, **_kwargs):
-        self.tools[name] = handler
-        return None
+    # -- session ---------------------------------------------------------
+    def session_cwd(self) -> str:
+        return self._cwd
 
-    def get_config(self, key, default=None):
-        return self.settings.get(key, default)
+    def set_cwd(self, path: Path) -> None:
+        self._cwd = str(path)
+
+    # -- redaction -------------------------------------------------------
+    def redact_text(self, text: str) -> str:
+        self.redact_calls.append(text)
+        if self.redactor is not None:
+            return self.redactor(text)
+        return text
+
+    # -- tool dispatch ---------------------------------------------------
+    def dispatch_tool(self, tool_name: str, args: dict, **_kwargs) -> str:
+        self.tool_calls.append((tool_name, args))
+        if tool_name != "read_file":
+            return ""
+        text = self.remote.get(str(args.get("path")))
+        if text is None:
+            return f"Error: no such file: {args.get('path')}"
+        return "\n".join(f"{index}|{line}" for index, line in enumerate(text.splitlines(), start=1))
 
 
 @dataclass
@@ -77,7 +105,6 @@ class FakeHost:
     repo: Path
     ctx: FakeCtx
     plugin: Any
-    redactor_calls: list[str]
 
     @property
     def data_dir(self) -> Path:
@@ -88,40 +115,27 @@ def _module(name: str, **attrs: Any) -> types.ModuleType:
     mod = types.ModuleType(name)
     for key, value in attrs.items():
         setattr(mod, key, value)
-    mod.__path__ = []  # treat as a package so submodule imports resolve
+    mod.__path__ = []
     return mod
 
 
 def build_host(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, reply: str = ""
-) -> tuple[FakeHost, Callable]:
-    """Install the stubs and import the plugin module fresh."""
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    reply: str = "",
+    redactor: Callable[[str], str] | None = None,
+    remote: dict[str, str] | None = None,
+    expose_redact: bool = True,
+) -> tuple[FakeHost, FakeCtx]:
     home = tmp_path / "hermes-home"
     repo = tmp_path / "project"
     (repo / "pkg").mkdir(parents=True)
-    redactor_calls: list[str] = []
-    state = {"cwd": repo}
 
     def plugin_data_dir(name: str) -> Path:
         path = home / "plugin-data" / name
         path.mkdir(parents=True, exist_ok=True)
         return path
-
-    def redact_sensitive_text(text: str, *, force: bool = False, **_kwargs) -> str:
-        redactor_calls.append(text)
-        return text.replace("HOSTSECRET", "[redacted-by-host]")
-
-    def is_write_denied(path: str) -> bool:
-        return Path(path).name == "blocked.py"
-
-    def resolve_agent_cwd() -> Path:
-        return state["cwd"]
-
-    def resolve_path_for_task(raw: str, task_id: str = "default") -> str:
-        candidate = Path(raw)
-        if not candidate.is_absolute():
-            candidate = state["cwd"] / raw
-        return str(candidate)
 
     monkeypatch.setitem(sys.modules, "plugins", _module("plugins"))
     monkeypatch.setitem(
@@ -129,41 +143,13 @@ def build_host(
         "plugins.plugin_storage",
         _module("plugins.plugin_storage", plugin_data_dir=plugin_data_dir),
     )
-    monkeypatch.setitem(sys.modules, "agent", _module("agent"))
-    monkeypatch.setitem(
-        sys.modules, "agent.redact", _module("agent.redact", redact_sensitive_text=redact_sensitive_text)
-    )
-    monkeypatch.setitem(
-        sys.modules, "agent.file_safety", _module("agent.file_safety", is_write_denied=is_write_denied)
-    )
-    monkeypatch.setitem(
-        sys.modules, "agent.runtime_cwd", _module("agent.runtime_cwd", resolve_agent_cwd=resolve_agent_cwd)
-    )
-    monkeypatch.setitem(sys.modules, "tools", _module("tools"))
-    monkeypatch.setitem(
-        sys.modules,
-        "tools.file_tools_paths",
-        _module("tools.file_tools_paths", _resolve_path_for_task=resolve_path_for_task),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "hermes_cli",
-        _module("hermes_cli"),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "hermes_cli.plugins",
-        _module(
-            "hermes_cli.plugins",
-            VALID_HOOKS={"pre_tool_call", "post_tool_call", "pre_llm_call", "on_session_start"},
-        ),
-    )
 
-    ctx = FakeCtx(reply=reply)
+    ctx = FakeCtx(reply=reply, cwd=repo, redactor=redactor, remote=remote)
+    if not expose_redact:
+        ctx.redact_text = None  # type: ignore[assignment]  # an older host
     module = importlib.reload(importlib.import_module("house_style_hermes.plugin"))
     module.register(ctx)
-    host = FakeHost(home=home, repo=repo, ctx=ctx, plugin=module, redactor_calls=redactor_calls)
-    return host, lambda path: state.__setitem__("cwd", path)
+    return FakeHost(home=home, repo=repo, ctx=ctx, plugin=module), ctx
 
 
 @pytest.fixture()
@@ -174,7 +160,7 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeHost:
 
 @pytest.fixture()
 def host_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    def build(*, reply: str = "") -> tuple[FakeHost, Callable]:
-        return build_host(tmp_path, monkeypatch, reply=reply)
+    def build(**kwargs) -> FakeHost:
+        return build_host(tmp_path, monkeypatch, **kwargs)[0]
 
     return build

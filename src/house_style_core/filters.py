@@ -1,29 +1,34 @@
-"""Size, binary and secret-file filters.
+"""Size, binary, secret-name and location filters.
 
 The rules are deliberately conservative: anything this module cannot vouch for is
-skipped, and the caller is told why. The protected-path list itself belongs to the
-harness, so it is injected as a predicate (``is_protected``) rather than duplicated
-here — a hard-coded copy would drift from the host's own guard.
+skipped, and the caller is told why.
+
+There is no protected-path predicate here by design. The host's own write guards run
+before the tool call ever lands, so a blocked write produces no file change and
+therefore no signal — capture is only ever recorded for writes the host permitted. A
+public ``ctx.is_protected_path()`` would let a plugin pre-filter instead of relying on
+that; it is requested in the lane's core seam note rather than reached for privately.
 """
 
 from __future__ import annotations
 
 import fnmatch
-import re
-from collections.abc import Callable
 from pathlib import Path
 
 #: A file bigger than this is never read back, so no signal is captured.
 MAX_FILE_BYTES = 256 * 1024
 
-#: Longest block of lines stored for one edit (both a whole-file write and a patch).
+#: Longest block of lines stored for one edit.
 MAX_HUNK_LINES = 200
 
 #: Longest block of characters stored for one edit.
 MAX_HUNK_CHARS = 12_000
 
-#: Context lines kept either side of the edit so it can be found again after shifts.
+#: Context lines kept either side of the block so it can be found again after shifts.
 CONTEXT_LINES = 3
+
+#: Most occurrences captured for one ``replace_all`` edit.
+MAX_OCCURRENCES = 50
 
 #: Files that routinely hold credentials. Matched on the basename only.
 SECRET_NAME_PATTERNS = (
@@ -53,6 +58,9 @@ SECRET_NAME_PATTERNS = (
     "service-account*.json",
 )
 
+#: Path segments never captured, whatever the file is called.
+SKIP_SEGMENTS = (".git", ".hg", ".svn", "node_modules", "__pycache__")
+
 _BINARY_SNIFF_BYTES = 8192
 
 
@@ -60,6 +68,12 @@ def is_secret_like_name(path: str | Path) -> bool:
     """True for names that conventionally hold credentials."""
     name = Path(str(path)).name.lower()
     return any(fnmatch.fnmatch(name, pattern) for pattern in SECRET_NAME_PATTERNS)
+
+
+def has_skipped_segment(rel_path: str) -> bool:
+    """True when the relative path runs through a directory we never look inside."""
+    parts = rel_path.split("/")
+    return any(part in SKIP_SEGMENTS for part in parts[:-1])
 
 
 def looks_binary(data: bytes) -> bool:
@@ -79,32 +93,24 @@ def skip_reason(
     rel_path: str | None,
     size: int | None = None,
     text: str | None = None,
-    is_protected: Callable[[str], bool] | None = None,
 ) -> str | None:
-    """Why this file must not be captured, or ``None`` when it may be.
-
-    ``is_protected`` is the harness's own protected-path predicate (in Hermes:
-    ``agent.file_safety.is_write_denied``); pass ``None`` for a core-only run.
-    """
+    """Why this file must not be captured, or ``None`` when it may be."""
     if rel_path is None:
         return "outside the repository"
+    if has_skipped_segment(rel_path):
+        return "inside a directory house-style never reads"
     if is_secret_like_name(path):
         return "secret-like file name"
     if size is not None and size > MAX_FILE_BYTES:
         return f"file larger than {MAX_FILE_BYTES} bytes"
     try:
-        if text is not None and looks_binary(text.encode("utf-8", "replace")):
-            return "binary file"
-        elif text is None and path.is_file() and looks_binary(path.read_bytes()[: _BINARY_SNIFF_BYTES + 1]):
+        if text is not None:
+            if looks_binary(text.encode("utf-8", "replace")):
+                return "binary file"
+        elif path.is_file() and looks_binary(path.read_bytes()[: _BINARY_SNIFF_BYTES + 1]):
             return "binary file"
     except OSError:
         return "unreadable file"
-    if is_protected is not None:
-        try:
-            if is_protected(str(path)):
-                return "protected path"
-        except Exception:  # a broken host predicate must not lose the whole hook
-            return "protected-path check failed"
     return None
 
 
@@ -120,8 +126,3 @@ def hunk_too_big(lines: list[str]) -> str | None:
 def truncate_lines(lines: list[str], limit: int) -> list[str]:
     """First *limit* lines, unchanged (used for display, never for matching)."""
     return list(lines[:limit])
-
-
-def redact_path_hint(rel_path: str) -> str:
-    """Relative path with any home-like prefix stripped; never absolute."""
-    return re.sub(r"^(\.\./)+", "", rel_path)

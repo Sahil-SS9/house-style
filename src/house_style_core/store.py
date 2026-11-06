@@ -210,6 +210,19 @@ class Store:
     def set_last_generated(self, key: str, entries: list[str]) -> None:
         self.set_meta(key, last_generated=[str(item) for item in entries])
 
+    # -- files a backend would not let us read ------------------------------
+    def record_unreadable(self, key: str, entry: dict[str, Any], *, limit: int = 20) -> None:
+        """Remember a file we could not read back, so status can name the backend."""
+        current = list(self.meta(key).get("unreadable") or [])
+        current.append(entry)
+        self.set_meta(key, unreadable=current[-limit:])
+
+    def unreadable(self, key: str) -> list[dict[str, Any]]:
+        return [row for row in (self.meta(key).get("unreadable") or []) if isinstance(row, dict)]
+
+    def clear_unreadable(self, key: str) -> None:
+        self.set_meta(key, unreadable=[])
+
     # -- housekeeping ----------------------------------------------------
     def tracked_repos(self) -> list[tuple[str, Path]]:
         """``(key, meta path)`` for every tracked repository."""

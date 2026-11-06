@@ -3,6 +3,13 @@
 Work through this in order. Nothing here publishes anything: the repository, the
 catalog entry and the release itself are the owner's calls.
 
+## 0. Prerequisite: the redaction seam
+
+house-style records nothing until the target Hermes exposes `ctx.redact_text()`. That
+method does not exist in mainline yet — it is being drafted as a small core PR for the
+share plugin. **Do not submit the catalog entry before it merges.** On a build without
+it the plugin loads and refuses, which is the correct behaviour, not a bug.
+
 ## 1. Local gates (must all pass on the commit you intend to publish)
 
 ```bash
@@ -12,7 +19,7 @@ HERMES_HOST_SRC=/path/to/hermes-agent ./scripts/check.sh   # tests, lint, format
 
 - [ ] Core suite green, plugin suite green.
 - [ ] No personal paths, no internal hostnames, no names of private tooling anywhere in
-      the tree, the tests or the commit messages.
+      the tree, the tests or the commit messages. Attribution is `Sahil-SS9`.
 - [ ] `git status --porcelain` is empty apart from the release commit itself.
 
 ## 2. Validate against a clean Hermes, not your own install
@@ -31,14 +38,11 @@ HERMES_HOME=$(mktemp -d) PYTHONPATH=/tmp/host \
 ```
 
 - [ ] `Validation passed.`
-- [ ] Every warning is understood and written down. This plugin has three *private core
-      imports* warnings (`agent.redact.redact_sensitive_text`,
-      `agent.file_safety.is_write_denied`, `hermes_cli.plugins.VALID_HOOKS`). Each is guarded
-      so a rename degrades instead of crashing, and each is there because the public
-      surface does not expose it (see "Open questions" in the lane report). Do not
-      silence them by deleting the guard.
-- [ ] `python -c "from hermes_cli.plugin_dev import doctor_plugin; ..."` reports the three
-      declared hooks registered and zero findings.
+- [ ] Every warning is understood and written down. The only finding expected is the
+      missing runtime seam above; there should be **no private core import warnings** at
+      all — the adapter imports no Hermes module.
+- [ ] `doctor_plugin` reports exactly `post_tool_call` and `on_session_start`
+      registered, zero findings.
 
 ## 3. Install into a throwaway home and drive it
 
@@ -53,29 +57,34 @@ cp -r /tmp/pin "$HERMES_HOME/plugins/house-style"
 ```
 
 - [ ] `hermes plugins list` shows the plugin, enabled, with no load error.
-- [ ] Classic CLI: `/house-style status` prints counts, not an error.
+- [ ] Classic CLI: `/house-style status` prints state, not an error.
 - [ ] TUI (`hermes --tui`): the same command, same wording.
-- [ ] Gateway (Discord or Telegram): the same command, same wording. A surface that
-      cannot run it must refuse with a message, not fail silently.
-- [ ] The full live scenario from the lane: agent writes a module with `os.path`,
-      the user rewrites it to `pathlib` twice across two sessions, `/house-style status`
-      shows the edited pairs, `/house-style learn` shows a diff, `/house-style learn
-      confirm` writes the file, and a fresh session follows the preference.
+- [ ] Gateway (a real dispatch, not a dry run): the same command, same wording.
+- [ ] The full live scenario: agent writes a module with `os.path`; the user rewrites it
+      to `pathlib` twice across two sessions; `status` shows the edited pairs; `learn`
+      shows a diff; `learn confirm` writes the block into `AGENTS.md` (or the project's
+      own context file); a fresh session's system prompt carries the rules through
+      Hermes's normal context loading.
+- [ ] A repo that already has `AGENTS.md` keeps it, with the block added; a repo that
+      already has `.hermes.md` gets the block there and no new `AGENTS.md`.
+- [ ] Multi-file V4A patch and `replace_all` both produce one signal per hunk/occurrence.
+- [ ] A remote backend either captures through `read_file` or is named per backend in
+      `status`.
 - [ ] Live setup untouched: `plugins/` listing unchanged, no `plugins.enabled` write, no
       config edit in the operator's own home.
 
 ## 4. Publish (owner only)
 
 - [ ] Create the public repository, push `main`.
-- [ ] Tag `v0.1.0`.
-- [ ] Read the tag back: `git ls-remote origin refs/heads/main refs/tags/v0.1.0`.
+- [ ] Tag `v0.2.0`.
+- [ ] Read the tag back: `git ls-remote origin refs/heads/main refs/tags/v0.2.0`.
 - [ ] Fill `sha:` in `plugin-catalog/house-style.yaml` with the full 40-hex commit.
-- [ ] Open the catalog pull request against `NousResearch/hermes-agent` with that entry
-      and the disclosure paragraph unchanged.
+- [ ] Open the catalog pull request with that entry and the disclosure paragraph
+      unchanged.
 
 ## 5. After a later change
 
 - [ ] Bump `version` in `plugin.yaml` and `pyproject.toml` together.
-- [ ] Re-run section 1 and 2 at the new commit.
+- [ ] Re-run sections 1 and 2 at the new commit.
 - [ ] Send a separate catalog pull request bumping `sha:` (the entry pins a commit, not a
       branch).

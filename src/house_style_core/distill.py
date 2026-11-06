@@ -7,6 +7,7 @@ the same batching and parsing.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
@@ -127,7 +128,7 @@ def build_messages(pairs: Sequence[Pair], existing: Sequence[str]) -> list[dict[
 
 
 def diff_preview(old: str, new: str, *, max_lines: int = 80) -> str:
-    """Unified diff of the preferences file, for the confirm step."""
+    """Unified diff of the project context file, for the confirm step."""
     import difflib
 
     old_lines = old.splitlines(keepends=False)
@@ -136,8 +137,8 @@ def diff_preview(old: str, new: str, *, max_lines: int = 80) -> str:
         difflib.unified_diff(
             old_lines,
             new_lines,
-            fromfile=".hermes/house-style.md",
-            tofile=".hermes/house-style.md",
+            fromfile="project context file",
+            tofile="project context file",
             lineterm="",
         )
     )
@@ -146,3 +147,25 @@ def diff_preview(old: str, new: str, *, max_lines: int = 80) -> str:
     if len(diff) > max_lines:
         diff = diff[:max_lines] + ["... (diff truncated)"]
     return "\n".join(diff)
+
+
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
+
+
+def parse_response(text: str) -> list[str]:
+    """Pull preference entries out of a model reply.
+
+    Only a numbered or bulleted list is accepted: a stray sentence must never become a
+    permanent line in the user's context file, so prose is dropped rather than guessed
+    at. Code fences, headings and HTML comments are ignored, and the output is capped.
+    """
+    from .contextfile import MAX_ENTRIES, normalise
+
+    listed: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("```") or line.startswith("#") or line.startswith("<!--"):
+            continue
+        if _LIST_ITEM.match(line):
+            listed.append(line)
+    return normalise(listed)[:MAX_ENTRIES]

@@ -5,7 +5,7 @@ description = "Learn a project's house style from how you correct an agent's edi
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Sahil Saghir" }]
+authors = [{ name = "Sahil-SS9" }]
 
 # No runtime dependencies: the core is standard library only, and the Hermes
 # adapter uses the host's own plugin API. Anything added here also has to be
