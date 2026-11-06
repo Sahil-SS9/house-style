@@ -379,6 +379,24 @@ def _reset(root: Path, eng: Engine, confirmed: bool) -> str:
     )
 
 
+def _command_root() -> Path | None:
+    """Repository root for command output, or the session's logical root remotely.
+
+    A Docker or SSH session's working directory does not exist on this host, so the
+    usual ``.git`` walk cannot find anything; the session directory itself is then the
+    root, which is what capture keys those signals by too.
+    """
+    cwd = _session_cwd()
+    root = find_repo_root(cwd)
+    if root is not None:
+        return root
+    try:
+        visible = cwd.exists()
+    except OSError:
+        visible = False
+    return None if visible else cwd
+
+
 def handle_command(raw_args: str = "", **kwargs: Any) -> str:
     """``/house-style`` entry point, shared by the classic CLI, the TUI and the gateway."""
     text = (raw_args or "").strip()
@@ -395,7 +413,7 @@ def handle_command(raw_args: str = "", **kwargs: Any) -> str:
         sub, rest = "reset-confirm", ""
 
     cwd = _session_cwd()
-    root = find_repo_root(cwd)
+    root = _command_root()
     if root is None:
         return (
             "house-style: this working directory is not inside a git repository, so there "

@@ -350,3 +350,13 @@ def test_a_broken_data_directory_is_reported(host_factory, monkeypatch):
     make_repo(host)
     monkeypatch.setattr(host.plugin, "_plugin_data_dir", lambda: (_ for _ in ()).throw(RuntimeError("nope")))
     assert "plugin data directory unavailable" in run(host, "status")
+
+
+def test_commands_work_in_a_remote_session_directory(host_factory):
+    """A Docker/SSH cwd does not exist on the host, so it becomes the logical root."""
+    host = host_factory(remote={"/workspace/pkg/far.py": "value = 1\n"})
+    make_repo(host)
+    host.ctx.set_cwd(Path("/workspace"))
+    out = run(host, "status")
+    assert "House style — /workspace" in out, out
+    assert "context file:" in out
