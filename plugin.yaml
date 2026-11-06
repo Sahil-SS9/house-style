@@ -1,0 +1,23 @@
+name: house-style
+version: 0.1.0
+manifest_version: 2
+description: "Learn a project's house style from how you correct the agent's edits: records the blocks write_file and patch introduce, notices which you keep, rewrite or revert, and distils the pattern into a preferences file you own. Disclosure — registers post_tool_call (write_file and patch only), on_session_start and pre_llm_call; reads the tool arguments and the files those tools just wrote, inside a git repository only; stores redacted before/after pairs in plugin-data; writes .hermes/house-style.md in the project and only after /house-style learn confirm; calls your configured model once per /house-style learn; no other network access, no subprocesses."
+author: "Sahil Saghir"
+license: MIT
+homepage: https://github.com/Sahil-SS9/house-style
+requires_hermes: ">=0.23.0"
+provides_hooks:
+  - post_tool_call
+  - on_session_start
+  - pre_llm_call
+provides_tools: []
+requires_env: []
+tags:
+  - memory
+  - workflow
+  - style
+config_schema:
+  inject:
+    type: str
+    default: first_turn
+    description: "When to add the learned preferences to a session: first_turn (default) or off."
