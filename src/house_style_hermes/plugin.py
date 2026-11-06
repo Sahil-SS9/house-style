@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from house_style_core import distill, prefs
+from house_style_core import distill, prefs, repo_key
 from house_style_core.engine import PREFS_RELPATH, Engine
 from house_style_core.gitio import find_repo_root
 
@@ -250,11 +250,15 @@ def on_pre_llm_call(
         if token in _injected:
             return None
         eng = engine()
-        if eng.store.is_off(eng.store.register_repo(root)):
+        # Read the off flag without registering the repository: merely opening a session
+        # in a project must not create a data file for it.
+        if eng.store.is_off(repo_key(root)):
             return None
         block = eng.injection(root)
         if not block:
             return None
+        if len(_injected) > 500:  # a long-lived gateway must not grow this without end
+            _injected.clear()
         _injected.add(token)
         return {"context": block}
     except Exception:

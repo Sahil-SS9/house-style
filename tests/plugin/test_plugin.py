@@ -179,6 +179,15 @@ def test_unknown_injection_setting_refuses_and_is_reported(host: FakeHost):
     assert "unknown inject setting" in run(host, "status")
 
 
+def test_a_session_in_an_untouched_project_writes_nothing(host: FakeHost):
+    make_repo(host)
+    host.ctx.hooks["pre_llm_call"](session_id="s1", is_first_turn=True)
+    host.ctx.hooks["on_session_start"](session_id="s1")
+    run(host, "status")
+    files = [path for path in host.data_dir.rglob("*") if path.is_file()] if host.data_dir.exists() else []
+    assert files == [], "reading a project must not leave a data file behind"
+
+
 def test_injection_is_off_for_a_repository_that_was_turned_off(host: FakeHost):
     make_repo(host)
     (host.repo / PREFS_RELPATH).parent.mkdir(parents=True, exist_ok=True)
