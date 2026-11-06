@@ -92,8 +92,16 @@ There are no settings to configure.
 The file is read back after the write, so the stored hash and context describe what is
 actually there. On a remote backend (Docker, SSH, Modal) the host cannot see the file,
 so it is read through the `read_file` tool instead, and `status` shows how many signals
-came from each route. A backend that cannot be read at all is named per session in
-`status` — never a silent gap.
+came from each route. A backend that cannot be read at all is named in `status` with the
+session it belongs to — never a silent gap.
+
+Known limit, measured on `26874afd`: in a `post_tool_call` hook, `ctx.session_cwd()`
+answers with the directory the CLI was launched from rather than the backend's working
+directory, and `ctx.dispatch_tool()` carries no task scope, so a read of a container
+file often cannot be aimed at the right environment. house-style then records the edit
+as "could not read" for that backend rather than guessing. The fix belongs in the host:
+a session-scoped working directory that hooks can read, or a task-scoped `read_file`
+dispatch (see the seam note in the lane evidence).
 
 Skipped, with the reason in debug logs: files outside a git repository, binary files,
 files over 256 KB, secret-like names (`.env`, `*.pem`, `id_rsa*`, `credentials*` and

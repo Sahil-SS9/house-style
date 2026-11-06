@@ -433,3 +433,21 @@ def test_scanning_and_reporting_create_no_files(tmp_path: Path):
     eng.scan(repo)
     eng.status(repo)
     assert not (tmp_path / "data").exists(), "reading a project must not leave data behind"
+
+
+def test_unreadable_files_are_reported_across_projects(tmp_path: Path):
+    """A remote session may be filed under its launch directory; never drop it silently."""
+    repo = make_repo(tmp_path / "repo")
+    other = make_repo(tmp_path / "other")
+    eng = engine(tmp_path)
+    eng.capture(
+        repo_root=other,
+        file_path=other / "container-only" / "x.py",
+        raw_path="/workspace/pkg/x.py",
+        tool="write_file",
+        blocks=[Block(["value = 1"])],
+        task_id="docker-2",
+    )
+    text = eng.status(repo)
+    assert "could not read on backend docker-2" in text
+    assert "in other" in text

@@ -405,14 +405,27 @@ class Engine:
             f"{counts.get('reverted', 0)} reverted"
         )
 
-        unreadable = self.store.unreadable(key)
+        # Files a backend would not let us read are reported for this project and for
+        # every other one we track: a Docker or SSH session can be filed under the
+        # directory it was launched from, and a silent drop there would be a gap.
+        unreadable: list[tuple[str, str, str]] = []
+        for row in self.store.unreadable(key):
+            unreadable.append(("", str(row.get("task") or "local"), str(row.get("path") or "?")))
+        for other_key, _ in self.store.tracked_repos():
+            if other_key == key:
+                continue
+            other_root = str(self.store.meta(other_key).get("repo") or other_key)
+            label = Path(other_root).name or other_root
+            for row in self.store.unreadable(other_key):
+                unreadable.append((label, str(row.get("task") or "local"), str(row.get("path") or "?")))
         if unreadable:
-            grouped: dict[str, list[str]] = {}
-            for row in unreadable:
-                grouped.setdefault(str(row.get("task") or "local"), []).append(str(row.get("path") or "?"))
-            for backend, paths in grouped.items():
+            grouped: dict[tuple[str, str], list[str]] = {}
+            for label, backend, path in unreadable:
+                grouped.setdefault((label, backend), []).append(path)
+            for (label, backend), paths in list(grouped.items())[:6]:
                 shown = ", ".join(paths[-3:])
-                lines.append(f"  could not read on backend {backend}: {len(paths)} file(s): {shown}")
+                where = f" in {label}" if label else ""
+                lines.append(f"  could not read on backend {backend}{where}: {len(paths)} file(s): {shown}")
 
         if self.store.pending(key):
             lines.append("  pending learn proposal: yes — run /house-style learn confirm")
