@@ -157,8 +157,7 @@ Two harness-level behaviours are worth copying rather than reimplementing:
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
-.venv/bin/python -m pytest tests -q
-.venv/bin/ruff check .
+./scripts/check.sh                     # every gate: tests, lint, format, catalog entry
 ```
 
 The core tests use real temporary git repositories. The plugin tests install a fake

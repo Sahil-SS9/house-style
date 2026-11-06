@@ -7,9 +7,7 @@ catalog entry and the release itself are the owner's calls.
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
-.venv/bin/python -m pytest tests -q          # expect: all pass
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
+HERMES_HOST_SRC=/path/to/hermes-agent ./scripts/check.sh   # tests, lint, format, catalog entry
 ```
 
 - [ ] Core suite green, plugin suite green.
