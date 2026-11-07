@@ -178,7 +178,16 @@ class Engine:
         text, read_via = self._read_back(path, raw_path, task_id)
         if text is None:
             key = self.store.register_repo(root)
-            self.store.record_unreadable(key, {"task": task_id or "local", "path": rel_path, "ts": utc_now()})
+            why = ""
+            if self.remote_note is not None:
+                try:
+                    why = str(self.remote_note() or "")
+                except Exception:
+                    why = ""
+            self.store.record_unreadable(
+                key,
+                {"task": task_id or "local", "path": rel_path, "ts": utc_now(), "why": why},
+            )
             return Capture(False, "file could not be read back on this backend")
 
         reason = skip_reason(path, rel_path=rel_path, size=len(text.encode("utf-8")), text=text)
