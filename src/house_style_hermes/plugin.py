@@ -162,6 +162,7 @@ def _read_remote(raw_path: str, task_id: str, abs_path: str = "") -> str | None:
         preview = " ".join(str(raw).split())[:160]
         attempts.append(f"{candidate}: {preview}")
     _last_read_error = " | ".join(attempts) or "no path to try"
+    logger.info("house-style: remote read failed (task=%s): %s", tid, _last_read_error[:400])
     return None
 
 
@@ -356,6 +357,14 @@ def _capture_tool_call(
             continue
         path = _resolve_tool_path(raw_path, session_id, task_id)
         root = _repo_root(path, session_id, task_id)
+        logger.info(
+            "house-style: capture %s raw=%s path=%s root=%s task=%s",
+            tool,
+            raw_path,
+            path,
+            root,
+            task_id or "-",
+        )
         if root is None:
             logger.debug("house-style: %s is outside a git repository", raw_path)
             continue
