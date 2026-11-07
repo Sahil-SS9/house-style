@@ -23,10 +23,12 @@ description: >-
   stores redacted before/after pairs (repository-relative path, hash, up to 200 lines
   per block, up to 400 rows and 512 KB per repository) in plugin-data/house-style; writes
   one marked section of the project context file and only after /house-style learn
-  confirm; calls your configured model once per /house-style learn and nothing else; no
-  telemetry, no subprocesses, no network beyond that model call. Requires a Hermes build
-  that exposes ctx.redact_text(); on a build without it the plugin records nothing and
-  says so in /house-style status.
+  confirm; calls your configured model once per /house-style learn and nothing else; on a
+  remote backend asks that task's terminal tool for `pwd` once per task; no telemetry, no
+  subprocesses, no network beyond that model call. Needs ctx.redact_text()
+  (NousResearch/hermes-agent#150220); on a build without it the plugin records nothing and
+  says so in /house-style status. On a chat platform the commands act on the profile's
+  terminal.cwd.
 maintainer: Sahil-SS9
 tier: community
 category: tools

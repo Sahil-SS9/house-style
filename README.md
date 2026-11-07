@@ -73,7 +73,9 @@ No Python dependencies, no API keys: it uses the model you already configured.
 | `/house-style export` | Print the rules as markdown. |
 
 All of these are plugin slash commands, so they work in `hermes`, in `hermes --tui` and
-on the messaging gateway from the same registration.
+on the messaging gateway from the same registration. A chat (Discord, Telegram, ...) has no
+working directory of its own: there the commands act on the profile's `terminal.cwd`, so set
+that to the repository you want them to track.
 
 There are no settings to configure.
 
@@ -151,7 +153,9 @@ repositories are tracked; files untouched for 90 days are removed on the next pa
   (`.hermes.md`, `AGENTS.md`, `CLAUDE.md` or `.cursorrules`, else a new `AGENTS.md`), and
   only after `/house-style learn confirm`.
 - **Model calls:** one per `/house-style learn`.
-- **Network:** none beyond that model call. No telemetry, no subprocesses.
+- **Commands it runs:** none on the host. On a remote backend it asks that task's terminal
+  tool for `pwd` once per task, to learn the directory the file tools used.
+- **Network:** none beyond that model call. No telemetry.
 
 ## Where it came from
 
