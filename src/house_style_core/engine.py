@@ -21,7 +21,7 @@ from .filters import (
     skip_reason,
 )
 from .gitio import find_repo_root, relative_to_root
-from .hunks import classify_signals, find_all_exact
+from .hunks import classify_text, find_all_exact
 from .models import (
     KEPT,
     READ_HOST,
@@ -32,7 +32,7 @@ from .models import (
     new_signal_id,
     utc_now,
 )
-from .redaction import Redactor, make_redactor, redact_lines
+from .redaction import RedactionError, Redactor, make_redactor, redact_lines
 from .store import Store, repo_key
 
 #: Newest edited pairs shown by ``status``.
@@ -76,6 +76,7 @@ class Scan:
     key: str
     signals: list[Signal]
     verdicts: list[Verdict]
+    unjudged: list[str] = field(default_factory=list)
 
     @property
     def counts(self) -> dict[str, int]:
@@ -93,12 +94,13 @@ class Engine:
         base_dir: str | Path,
         *,
         redact: Redactor | None = None,
-        read_remote: Callable[[str, str], str | None] | None = None,
+        read_remote: Callable[[str, str, str], str | None] | None = None,
         max_file_bytes: int = MAX_FILE_BYTES,
+        strict_redaction: bool = True,
     ) -> None:
         self.store = Store(base_dir)
         self.redact = redact
-        self.redactor = make_redactor(redact)
+        self.redactor = make_redactor(redact, strict=strict_redaction)
         self.read_remote = read_remote
         self.max_file_bytes = max_file_bytes
         self._read_cache: dict[str, tuple[float, str | None]] = {}
@@ -180,7 +182,10 @@ class Engine:
         if reason:
             return Capture(False, reason)
 
-        redacted_full = self.redactor(text)
+        try:
+            redacted_full = self.redactor(text)
+        except RedactionError as exc:
+            return Capture(False, f"host redaction failed, so nothing was stored ({exc})")
         redacted_lines = redacted_full.splitlines()
         lines = text.splitlines()
         key = self.store.register_repo(root)
@@ -208,7 +213,10 @@ class Engine:
                 skipped.append(f"{rel_path}: block not found after the write, so it did not land")
                 continue
 
-            hunk = redact_lines(block.added, self.redactor) or []
+            try:
+                hunk = redact_lines(block.added, self.redactor) or []
+            except RedactionError as exc:
+                return Capture(False, f"host redaction failed, so nothing was stored ({exc})")
             too_big = hunk_too_big(hunk)
             if too_big:
                 skipped.append(f"{rel_path}: {too_big}")
@@ -277,8 +285,22 @@ class Engine:
         root = Path(repo_root).resolve()
         key = repo_key(root)
         signals = self.store.rows(key)
-        verdicts = classify_signals(signals, self._reader(root)) if signals else []
-        return Scan(root, key, signals, verdicts)
+        verdicts: list[Verdict] = []
+        unjudged: list[str] = []
+        if signals:
+            read = self._reader(root)
+            cache: dict[str, str | None] = {}
+            for signal in signals:
+                if signal.path not in cache:
+                    try:
+                        cache[signal.path] = read(signal.path)
+                    except RedactionError:
+                        cache[signal.path] = None
+                        unjudged.append(signal.path)
+                if signal.path in unjudged:
+                    continue
+                verdicts.append(classify_text(cache[signal.path], signal))
+        return Scan(root, key, signals, verdicts, unjudged)
 
     def repo_for(self, path: str | Path) -> Path | None:
         return find_repo_root(path)
@@ -426,6 +448,12 @@ class Engine:
                 shown = ", ".join(paths[-3:])
                 where = f" in {label}" if label else ""
                 lines.append(f"  could not read on backend {backend}{where}: {len(paths)} file(s): {shown}")
+
+        if scan.unjudged:
+            names = ", ".join(sorted(set(scan.unjudged))[:3])
+            lines.append(
+                f"  not compared (host redaction failed): {len(set(scan.unjudged))} file(s): {names}"
+            )
 
         if self.store.pending(key):
             lines.append("  pending learn proposal: yes — run /house-style learn confirm")

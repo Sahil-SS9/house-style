@@ -1,15 +1,16 @@
 """Redaction seam.
 
-The harness owns the real redactor: in Hermes that is
-``agent.redact.redact_sensitive_text``. A plugin must never invent its own idea of
-what a secret looks like and call it enough, so the harness redactor is passed in
-and applied with ``force=True`` — it must hold regardless of the user's
-``security.redact_secrets`` preference.
+The harness owns the real redactor: in Hermes that is ``ctx.redact_text()``. A plugin
+must never invent its own idea of what a secret looks like and call it enough, so the
+host redactor is passed in and applied to everything that gets stored.
 
-The fallback below exists so the core package is usable stand-alone (tests, another
-harness) and so a host whose redactor fails to import still stores something
-scrubbed rather than raw file content. It is intentionally narrow: well-known token
-shapes, assignment to a credential-shaped name, and private-key blocks.
+A host redactor that *raises* is treated as a failure, not a fallback: the core raises
+``RedactionError`` and the caller refuses to store or compare that text, because
+storing unredacted text is worse than storing nothing.
+
+The fallback below is a floor, not a substitute: it runs after the host redactor so a
+host pass that misses a shape cannot put raw text on disk. It is intentionally narrow —
+well-known token shapes, assignment to a credential-shaped name, private-key blocks.
 """
 
 from __future__ import annotations
@@ -19,6 +20,11 @@ from collections.abc import Callable
 
 #: A redactor takes text and returns text with credentials replaced.
 Redactor = Callable[[str], str]
+
+
+class RedactionError(RuntimeError):
+    """The host redactor failed. Callers must refuse to store or compare the text."""
+
 
 _MASK = "[redacted]"
 
@@ -65,11 +71,13 @@ def fallback_redact(text: str) -> str:
     return out
 
 
-def make_redactor(primary: Redactor | None = None) -> Redactor:
+def make_redactor(primary: Redactor | None = None, *, strict: bool = False) -> Redactor:
     """Compose the harness redactor (when given) over the fallback.
 
-    Both run: a host redactor that misses a shape still gets the fallback pass, and
-    a host redactor that raises degrades to the fallback instead of storing raw text.
+    Both run, so a host redactor that misses a shape still gets the fallback pass.
+    With ``strict`` a host redactor that raises propagates as :class:`RedactionError`
+    so the caller refuses to store or compare; without it (stand-alone core use) the
+    fallback alone is used.
     """
 
     def _redact(text: str) -> str:
@@ -77,7 +85,9 @@ def make_redactor(primary: Redactor | None = None) -> Redactor:
         if primary is not None:
             try:
                 out = primary(out)
-            except Exception:
+            except Exception as exc:
+                if strict:
+                    raise RedactionError(str(exc) or exc.__class__.__name__) from exc
                 out = text
         return fallback_redact(out)
 

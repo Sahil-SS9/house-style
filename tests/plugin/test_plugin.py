@@ -184,9 +184,8 @@ def test_a_multi_file_v4a_patch_captures_every_file(host: FakeHost):
 
 
 def test_a_remote_backend_is_read_through_the_tool_surface(host_factory):
-    host = host_factory(remote={"/workspace/pkg/far.py": "value = 1\n"})
+    host = host_factory(remote={"/workspace/pkg/far.py": "value = 1\n"}, task_cwd="/workspace")
     make_repo(host)
-    (host.repo / "AGENTS.md").write_text("# AGENTS\n", encoding="utf-8")
     host.ctx.hooks["post_tool_call"](
         tool_name="write_file",
         args={"path": "/workspace/pkg/far.py", "content": "value = 1\n"},
@@ -194,9 +193,17 @@ def test_a_remote_backend_is_read_through_the_tool_surface(host_factory):
         task_id="docker-3",
         session_id="s1",
     )
-    status = run(host, "status")
-    assert host.ctx.tool_calls and host.ctx.tool_calls[0][0] == "read_file"
-    assert "signals: 1 (tool-surface 1)" in status, status
+    reads = [call for call in host.ctx.tool_calls if call[0] == "read_file"]
+    assert reads, "the file must be read through the tool surface"
+    # The read has to run in the task that wrote the file, or it lands in the wrong
+    # environment (a host one) and cannot see a container's filesystem at all.
+    read_kwargs = [kw for name, kw in host.ctx.dispatch_kwargs if name == "read_file"]
+    assert read_kwargs and read_kwargs[0].get("task_id") == "docker-3", read_kwargs
+    # The signal is keyed by the backend task's own directory, which is what a command
+    # in that session reports too.
+    signals = host.plugin.engine().scan(Path("/workspace")).signals
+    assert [signal.path for signal in signals] == ["pkg/far.py"]
+    assert signals[0].read_via == "tool-surface"
 
 
 def test_an_unreadable_backend_is_named_in_status(host: FakeHost):
@@ -371,3 +378,45 @@ def test_capture_uses_the_directory_the_session_reported(host: FakeHost):
     write_file(host, "pkg/module.py", "value = 1\n")
     signals = host.plugin.engine().scan(host.repo).signals
     assert [signal.path for signal in signals] == ["pkg/module.py"]
+
+
+# -- redaction failures ------------------------------------------------------
+def test_capture_refuses_to_store_when_host_redaction_raises(host: FakeHost):
+    make_repo(host)
+
+    def boom(_text: str) -> str:
+        raise RuntimeError("scrubber is down")
+
+    host.ctx.redactor = boom
+    write_file(host, "pkg/module.py", "value = 1\n")
+    assert list((host.data_dir / "signals").glob("*.jsonl")) == []
+    assert "signals: 0" in run(host, "status")
+
+
+def test_a_signal_is_not_mislabelled_when_redaction_fails_later(host: FakeHost):
+    make_repo(host)
+    write_file(host, "pkg/module.py", "value = 1\n")
+    assert "1 kept" in run(host, "status")
+
+    def boom(_text: str) -> str:
+        raise RuntimeError("scrubber is down")
+
+    host.ctx.redactor = boom
+    status = run(host, "status")
+    assert "not compared (host redaction failed): 1 file(s): pkg/module.py" in status
+    assert "0 kept" in status, "an unreadable file must not be reported as kept or reverted"
+
+
+def test_the_host_redactor_is_called_with_the_documented_signature(host_factory):
+    calls: list[tuple[str, bool]] = []
+
+    def redact(text: str, *, force: bool = False) -> str:
+        calls.append((text, force))
+        return text
+
+    host = host_factory()
+    make_repo(host)
+    host.ctx.redact_text = redact  # type: ignore[method-assign]
+    write_file(host, "pkg/module.py", "value = 1\n")
+    assert calls, "ctx.redact_text must be used"
+    assert all(force is False for _, force in calls), "storage honours security.redact_secrets"

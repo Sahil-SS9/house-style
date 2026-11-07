@@ -55,6 +55,7 @@ class FakeCtx:
         cwd: Path | None = None,
         redactor: Callable[[str], str] | None = None,
         remote: dict[str, str] | None = None,
+        task_cwd: str = "",
     ) -> None:
         self.hooks: dict[str, Callable] = {}
         self.commands: dict[str, dict[str, Any]] = {}
@@ -62,8 +63,10 @@ class FakeCtx:
         self._cwd = str(cwd or "")
         self.redactor = redactor
         self.remote = dict(remote or {})
+        self.task_cwd = task_cwd
         self.redact_calls: list[str] = []
         self.tool_calls: list[tuple[str, dict]] = []
+        self.dispatch_kwargs: list[tuple[str, dict]] = []
 
     # -- hooks, commands, model -----------------------------------------
     def register_hook(self, name, callback, **_kwargs):
@@ -89,8 +92,11 @@ class FakeCtx:
         return text
 
     # -- tool dispatch ---------------------------------------------------
-    def dispatch_tool(self, tool_name: str, args: dict, **_kwargs) -> str:
+    def dispatch_tool(self, tool_name: str, args: dict, **kwargs) -> str:
         self.tool_calls.append((tool_name, args))
+        self.dispatch_kwargs.append((tool_name, kwargs))
+        if tool_name == "terminal":
+            return self.task_cwd
         if tool_name != "read_file":
             return ""
         text = self.remote.get(str(args.get("path")))
@@ -127,6 +133,7 @@ def build_host(
     redactor: Callable[[str], str] | None = None,
     remote: dict[str, str] | None = None,
     expose_redact: bool = True,
+    task_cwd: str = "",
 ) -> tuple[FakeHost, FakeCtx]:
     home = tmp_path / "hermes-home"
     repo = tmp_path / "project"
@@ -144,7 +151,7 @@ def build_host(
         _module("plugins.plugin_storage", plugin_data_dir=plugin_data_dir),
     )
 
-    ctx = FakeCtx(reply=reply, cwd=repo, redactor=redactor, remote=remote)
+    ctx = FakeCtx(reply=reply, cwd=repo, redactor=redactor, remote=remote, task_cwd=task_cwd)
     if not expose_redact:
         ctx.redact_text = None  # type: ignore[assignment]  # an older host
     module = importlib.reload(importlib.import_module("house_style_hermes.plugin"))

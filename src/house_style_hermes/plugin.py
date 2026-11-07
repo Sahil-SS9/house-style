@@ -51,6 +51,7 @@ NO_REDACTOR = (
 )
 
 _engine: Engine | None = None
+_redact_source: Any = None
 _engine_lock = threading.Lock()
 _ctx: Any = None
 _last_scan: dict[str, float] = {}
@@ -61,6 +62,9 @@ _last_scan: dict[str, float] = {}
 #: remembering what the session itself reported keeps capture keyed the same way the
 #: commands are.
 _session_cwds: dict[str, str] = {}
+
+#: Working directory each backend task reported, keyed by task id.
+_task_cwds: dict[str, str] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -74,14 +78,21 @@ def _plugin_data_dir() -> Path:
 
 
 def _host_redact() -> Any:
-    """The host's redactor, or ``None`` on a build without the seam."""
+    """The host's redactor, or ``None`` on a build without the seam.
+
+    ``ctx.redact_text`` raises on internal failure rather than returning the text
+    unchanged, and that is the behaviour we want: the exception propagates so the
+    engine refuses to store anything it could not scrub.
+    """
     method = getattr(_ctx, "redact_text", None)
     if not callable(method):
         return None
 
     def redact(text: str) -> str:
         result = method(text)
-        return result if isinstance(result, str) else text
+        if not isinstance(result, str):
+            raise TypeError(f"ctx.redact_text returned {type(result).__name__}, not str")
+        return result
 
     return redact
 
@@ -118,20 +129,22 @@ def _remember_cwd(session_id: str) -> None:
 
 
 def _read_remote(raw_path: str, task_id: str, abs_path: str = "") -> str | None:
-    """Read a file through the tool surface, which is what reaches a remote backend.
+    """Read a file through the tool surface, in the task that wrote it.
 
-    The path as the tool saw it is tried first, then the absolute path, because a
-    relative path is resolved against the tool's own working directory and that is not
-    always the one this process thinks it is.
+    ``task_id`` matters: ``registry.dispatch`` hands it to the read handler, which
+    resolves relative paths against that task's own backend working directory and reads
+    through that backend's environment. Without it the read runs against whatever
+    environment the default task has — a host one, for a Docker or SSH session.
     """
     dispatch = getattr(_ctx, "dispatch_tool", None)
     if not callable(dispatch):
         return None
+    tid = task_id or "default"
     for candidate in (raw_path, abs_path):
         if not candidate:
             continue
         try:
-            raw = dispatch("read_file", {"path": candidate, "limit": TOOL_READ_LINES})
+            raw = dispatch("read_file", {"path": candidate, "limit": TOOL_READ_LINES}, task_id=tid)
         except Exception:
             logger.debug("house-style: read_file dispatch failed", exc_info=True)
             continue
@@ -139,6 +152,38 @@ def _read_remote(raw_path: str, task_id: str, abs_path: str = "") -> str | None:
         if text is not None:
             return text
     return None
+
+
+def _task_cwd(task_id: str) -> Path | None:
+    """The working directory of the backend task that made the tool call, if reachable.
+
+    Asked once per task through the terminal tool, in that task, so a Docker or SSH
+    session resolves to the directory the file tools actually used rather than the
+    directory this process was launched from.
+    """
+    tid = task_id or ""
+    if not tid:
+        return None
+    cached = _task_cwds.get(tid)
+    if cached is not None:
+        return Path(cached) if cached else None
+    dispatch = getattr(_ctx, "dispatch_tool", None)
+    if not callable(dispatch):
+        return None
+    try:
+        raw = dispatch("terminal", {"command": "pwd"}, task_id=tid)
+    except Exception:
+        logger.debug("house-style: task cwd probe failed", exc_info=True)
+        return None
+    text = raw.strip() if isinstance(raw, str) else ""
+    first = text.splitlines()[0].strip() if text else ""
+    if not first.startswith("/"):
+        _task_cwds[tid] = ""
+        return None
+    if len(_task_cwds) > 200:
+        _task_cwds.clear()
+    _task_cwds[tid] = first
+    return Path(first)
 
 
 def _is_numbered(line: str) -> bool:
@@ -164,12 +209,13 @@ def _strip_line_numbers(raw: Any) -> str | None:
 
 
 def _engine_for(base_dir: Path) -> Engine:
-    """One engine per plugin-data directory (a profile switch rebuilds it)."""
-    global _engine
+    """One engine per plugin-data directory and redactor (a profile switch rebuilds it)."""
+    global _engine, _redact_source
     with _engine_lock:
-        redact = _host_redact()
-        if _engine is None or _engine.store.base != base_dir or _engine.redact is not redact:
-            _engine = Engine(base_dir, redact=redact, read_remote=_read_remote)
+        source = getattr(_ctx, "redact_text", None) if _ctx is not None else None
+        if _engine is None or _engine.store.base != base_dir or _redact_source is not source:
+            _engine = Engine(base_dir, redact=_host_redact(), read_remote=_read_remote)
+            _redact_source = source
         return _engine
 
 
@@ -189,7 +235,7 @@ def _resolve_tool_path(raw: str, session_id: str = "") -> Path:
     return _session_cwd(session_id) / candidate
 
 
-def _repo_root(path: Path, session_id: str = "") -> Path | None:
+def _repo_root(path: Path, session_id: str = "", task_id: str = "") -> Path | None:
     """Repository root for a path, or the session's logical root on a remote backend.
 
     A file the host cannot see lives on a backend, where ``.git`` is not visible from
@@ -206,7 +252,7 @@ def _repo_root(path: Path, session_id: str = "") -> Path | None:
         visible = False
     if visible:
         return None
-    cwd = _session_cwd(session_id)
+    cwd = _task_cwd(task_id) or _session_cwd(session_id)
     return find_repo_root(cwd) or cwd
 
 
@@ -261,7 +307,7 @@ def _capture_tool_call(
         if not blocks:
             continue
         path = _resolve_tool_path(raw_path, session_id)
-        root = _repo_root(path, session_id)
+        root = _repo_root(path, session_id, task_id)
         if root is None:
             logger.debug("house-style: %s is outside a git repository", raw_path)
             continue
