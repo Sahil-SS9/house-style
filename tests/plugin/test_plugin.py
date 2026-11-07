@@ -438,3 +438,27 @@ def test_the_task_cwd_probe_reads_a_normalised_terminal_result(host_factory):
     signals = host.plugin.engine().scan(Path("/workspace")).signals
     assert [signal.path for signal in signals] == ["pkg/x.py"]
     assert signals[0].read_via == "tool-surface"
+
+
+def test_a_read_result_arrives_as_a_json_envelope(host_factory):
+    """registry.dispatch normalises results; the listing is under 'content'."""
+    host = host_factory(task_cwd="/workspace")
+    make_repo(host)
+
+    def dispatch(tool_name, args, **kwargs):
+        host.ctx.tool_calls.append((tool_name, args))
+        if tool_name == "terminal":
+            return "/workspace"
+        return '{"content": "1|value = 7", "total_lines": 1, "file_size": 10, "truncated": false}'
+
+    host.ctx.dispatch_tool = dispatch  # type: ignore[method-assign]
+    host.ctx.hooks["post_tool_call"](
+        tool_name="write_file",
+        args={"path": "pkg/y.py", "content": "value = 7\n"},
+        status="ok",
+        task_id="docker-8",
+    )
+    signals = host.plugin.engine().scan(Path("/workspace")).signals
+    assert [signal.path for signal in signals] == ["pkg/y.py"]
+    assert signals[0].read_via == "tool-surface"
+    assert signals[0].hunk == ["value = 7"]

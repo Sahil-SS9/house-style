@@ -231,18 +231,37 @@ def _is_numbered(line: str) -> bool:
 def _strip_line_numbers(raw: Any) -> str | None:
     """Turn ``read_file``'s ``LINE|CONTENT`` listing back into plain text.
 
-    Anything that is not a paginated listing — an error string, a refusal, an empty
-    reply — is ``None``: no file text was read, and capture must say so rather than
-    store an error message as if it were the file.
+    ``registry.dispatch`` normalises a handler's result, so what arrives here is often a
+    JSON envelope with the listing under ``content`` (``{"content": "1|line", ...}``)
+    rather than the bare listing. Anything that is not a paginated listing — an error,
+    a refusal, an empty reply — is ``None``: no file text was read, and capture must say
+    so rather than store an error message as if it were the file.
     """
     if not isinstance(raw, str) or not raw.strip():
         return None
-    lines = raw.splitlines()
+    text = raw
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        data = None
+    if isinstance(data, dict):
+        for key in ("content", "output", "result", "text"):
+            value = data.get(key)
+            if isinstance(value, str):
+                text = value
+                break
+        else:
+            return None
+    elif isinstance(data, str):
+        text = data
+    if not text.strip():
+        return None
+    lines = text.splitlines()
     numbered = [line for line in lines if _is_numbered(line)]
     if not numbered or len(numbered) < max(1, int(len(lines) * 0.8)):
         return None
     out = [line.partition("|")[2] if _is_numbered(line) else line for line in lines]
-    return "\n".join(out) + ("\n" if raw.endswith("\n") else "")
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 
 def _engine_for(base_dir: Path) -> Engine:
