@@ -420,3 +420,21 @@ def test_the_host_redactor_is_called_with_the_documented_signature(host_factory)
     write_file(host, "pkg/module.py", "value = 1\n")
     assert calls, "ctx.redact_text must be used"
     assert all(force is False for _, force in calls), "storage honours security.redact_secrets"
+
+
+def test_the_task_cwd_probe_reads_a_normalised_terminal_result(host_factory):
+    """registry.dispatch normalises results; a JSON envelope must still yield the path."""
+    host = host_factory(
+        remote={"/workspace/pkg/x.py": "value = 1\n"},
+        task_cwd='{"output": "/workspace\\n", "exit_code": 0, "stdout": "/workspace\\n"}',
+    )
+    make_repo(host)
+    host.ctx.hooks["post_tool_call"](
+        tool_name="write_file",
+        args={"path": "pkg/x.py", "content": "value = 1\n"},
+        status="ok",
+        task_id="docker-5",
+    )
+    signals = host.plugin.engine().scan(Path("/workspace")).signals
+    assert [signal.path for signal in signals] == ["pkg/x.py"]
+    assert signals[0].read_via == "tool-surface"

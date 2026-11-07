@@ -12,6 +12,7 @@ module is imported, and no private seam is used or fallen back to.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -154,6 +155,31 @@ def _read_remote(raw_path: str, task_id: str, abs_path: str = "") -> str | None:
     return None
 
 
+def _first_absolute_path(raw: Any) -> str:
+    """The first absolute path in a tool result, whatever envelope it arrived in.
+
+    ``registry.dispatch`` normalises handler results, so a terminal result can be the
+    bare output, a JSON object with ``output``/``stdout``, or a JSON string.
+    """
+    text = raw if isinstance(raw, str) else ""
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        data = None
+    if isinstance(data, dict):
+        for key in ("output", "stdout", "result", "content", "text"):
+            value = data.get(key)
+            if isinstance(value, str):
+                text = value
+                break
+    elif isinstance(data, str):
+        text = data
+    for line in reversed([line.strip() for line in text.splitlines() if line.strip()]):
+        if line.startswith("/") and " " not in line:
+            return line
+    return ""
+
+
 def _task_cwd(task_id: str) -> Path | None:
     """The working directory of the backend task that made the tool call, if reachable.
 
@@ -175,9 +201,9 @@ def _task_cwd(task_id: str) -> Path | None:
     except Exception:
         logger.debug("house-style: task cwd probe failed", exc_info=True)
         return None
-    text = raw.strip() if isinstance(raw, str) else ""
-    first = text.splitlines()[0].strip() if text else ""
-    if not first.startswith("/"):
+    first = _first_absolute_path(raw)
+    if not first:
+        logger.debug("house-style: task cwd probe returned no path (%r)", str(raw)[:120])
         _task_cwds[tid] = ""
         return None
     if len(_task_cwds) > 200:
@@ -227,12 +253,24 @@ def engine() -> Engine:
 # ---------------------------------------------------------------------------
 # paths
 # ---------------------------------------------------------------------------
-def _resolve_tool_path(raw: str, session_id: str = "") -> Path:
-    """A tool's ``path`` argument, resolved against the session working directory."""
+def _resolve_tool_path(raw: str, session_id: str = "", task_id: str = "") -> Path:
+    """A tool's ``path`` argument, resolved the way the tool itself resolved it.
+
+    The session directory is tried first because it is free; when the file is not there
+    — a remote backend, whose files live in the task's own environment — the task's
+    working directory is asked for once and used instead.
+    """
     candidate = Path(raw).expanduser()
     if candidate.is_absolute():
         return candidate
-    return _session_cwd(session_id) / candidate
+    direct = _session_cwd(session_id) / candidate
+    try:
+        if direct.exists():
+            return direct
+    except OSError:
+        return direct
+    task = _task_cwd(task_id)
+    return (task / candidate) if task is not None else direct
 
 
 def _repo_root(path: Path, session_id: str = "", task_id: str = "") -> Path | None:
@@ -306,7 +344,7 @@ def _capture_tool_call(
     for raw_path, blocks in _blocks_for(tool, args):
         if not blocks:
             continue
-        path = _resolve_tool_path(raw_path, session_id)
+        path = _resolve_tool_path(raw_path, session_id, task_id)
         root = _repo_root(path, session_id, task_id)
         if root is None:
             logger.debug("house-style: %s is outside a git repository", raw_path)
