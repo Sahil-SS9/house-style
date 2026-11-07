@@ -216,6 +216,7 @@ def test_an_unreadable_backend_is_named_in_status(host: FakeHost):
     )
     status = run(host, "status")
     assert "could not read on backend docker-9" in status, status
+    assert "last read error: /workspace/pkg/nope.py: Error: no such file" in status, status
 
 
 def test_redaction_goes_through_the_host(host_factory):

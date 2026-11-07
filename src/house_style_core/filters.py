@@ -121,8 +121,3 @@ def hunk_too_big(lines: list[str]) -> str | None:
     if sum(len(line) + 1 for line in lines) > MAX_HUNK_CHARS:
         return f"block larger than {MAX_HUNK_CHARS} characters"
     return None
-
-
-def truncate_lines(lines: list[str], limit: int) -> list[str]:
-    """First *limit* lines, unchanged (used for display, never for matching)."""
-    return list(lines[:limit])

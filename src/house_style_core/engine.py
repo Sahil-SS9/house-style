@@ -21,7 +21,7 @@ from .filters import (
     hunk_too_big,
     skip_reason,
 )
-from .gitio import find_repo_root, relative_to_root
+from .gitio import relative_to_root
 from .hunks import classify_text, find_all_exact
 from .models import (
     KEPT,
@@ -98,11 +98,10 @@ class Engine:
         read_remote: Callable[[str, str, str], str | None] | None = None,
         remote_note: Callable[[], str] | None = None,
         max_file_bytes: int = MAX_FILE_BYTES,
-        strict_redaction: bool = True,
     ) -> None:
         self.store = Store(base_dir)
         self.redact = redact
-        self.redactor = make_redactor(redact, strict=strict_redaction)
+        self.redactor = make_redactor(redact) if redact is not None else None
         self.read_remote = read_remote
         self.remote_note = remote_note
         self.max_file_bytes = max_file_bytes
@@ -227,13 +226,13 @@ class Engine:
 
             try:
                 hunk = redact_lines(block.added, self.redactor) or []
+                pre = redact_lines(block.pre, self.redactor)
             except RedactionError as exc:
                 return Capture(False, f"host redaction failed, so nothing was stored ({exc})")
             too_big = hunk_too_big(hunk)
             if too_big:
                 skipped.append(f"{rel_path}: {too_big}")
                 continue
-            pre = None if block.pre is None else redact_lines(block.pre, self.redactor)
 
             for index, start in enumerate(starts, start=1):
                 if tool == "write_file":
@@ -285,6 +284,8 @@ class Engine:
         if value is None and self.read_remote is not None:
             value = self._read_remote(signal.path, signal.task_id, str(root / signal.path))
         if value is not None:
+            if self.redactor is None:
+                raise RedactionError("no host redactor to compare with")
             value = self.redactor(value)  # same scrub as the stored blocks
         cache[key] = value
         return value
@@ -307,9 +308,6 @@ class Engine:
                     continue
                 verdicts.append(classify_text(text, signal))
         return Scan(root, key, signals, verdicts, unjudged)
-
-    def repo_for(self, path: str | Path) -> Path | None:
-        return find_repo_root(path)
 
     # -- the context file --------------------------------------------------
     def target(self, repo_root: str | Path, cwd: str | Path | None = None) -> contextfile.Target:
@@ -459,7 +457,9 @@ class Engine:
                 lines.append(f"  could not read on backend {backend}{where}: {len(paths)} file(s): {shown}")
             reasons = [str(row.get("why") or "") for row in unreadable_rows if row.get("why")]
             if reasons:
-                lines.append(f"  last read error: {reasons[-1][:300]}")
+                lines.append(
+                    f"  last read error: {' '.join(reasons[-1].split())[:120]} (full text in the log)"
+                )
 
         if scan.unjudged:
             names = ", ".join(sorted(set(scan.unjudged))[:3])

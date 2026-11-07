@@ -88,10 +88,9 @@ section.
 
 ## Redaction
 
-The host's `ctx.redact_text()` runs first, at its strongest setting, honouring
-`security.redact_secrets`. The core then applies its own narrow floor (known token
-prefixes, private-key blocks, credential-shaped assignments, URL userinfo) so a host
-pass that misses a shape cannot put raw text on disk.
+The host's `ctx.redact_text()` is the only redactor, at its strongest setting, honouring
+`security.redact_secrets`. The core keeps no regex list of its own: a second, narrower
+idea of what a secret looks like would drift from the host's and hide its gaps.
 
 `ctx.redact_text()` raises on internal failure. That propagates: the edit is not stored
 at all, and an edit whose file cannot be scrubbed for comparison is left unjudged and

@@ -48,14 +48,6 @@ class Hunk:
     context_after: list[str] = field(default_factory=list)
     kind: str = "update"  # "update" | "add"
 
-    @property
-    def added_text(self) -> str:
-        return "\n".join(self.added)
-
-    @property
-    def removed_text(self) -> str | None:
-        return "\n".join(self.removed) if self.removed else None
-
 
 @dataclass
 class ParsedPatch:

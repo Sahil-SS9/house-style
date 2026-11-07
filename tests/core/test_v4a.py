@@ -43,7 +43,6 @@ def test_add_file_has_no_removed_side():
     parsed = parse_patch(MULTI)
     added = [hunk for hunk in parsed.hunks if hunk.kind == "add"][0]
     assert added.removed == []
-    assert added.removed_text is None
 
 
 def test_deletions_and_moves_are_reported_not_captured():

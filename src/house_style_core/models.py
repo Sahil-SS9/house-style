@@ -14,7 +14,6 @@ this module re-interprets content.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -141,11 +140,3 @@ class Verdict:
             "after": list(self.after),
             "note": self.note,
         }
-
-
-def count_statuses(verdicts: Iterable[Verdict]) -> dict[str, int]:
-    counts = {name: 0 for name in STATUSES}
-    for verdict in verdicts:
-        if verdict.status in counts:
-            counts[verdict.status] += 1
-    return counts

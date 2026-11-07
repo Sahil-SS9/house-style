@@ -166,29 +166,31 @@ def _read_remote(raw_path: str, task_id: str, abs_path: str = "") -> str | None:
     return None
 
 
-def _first_absolute_path(raw: Any) -> str:
-    """The first absolute path in a tool result, whatever envelope it arrived in.
-
-    ``registry.dispatch`` normalises handler results, so a terminal result can be the
-    bare output, a JSON object with ``output``/``stdout``, or a JSON string.
-    """
-    text = raw if isinstance(raw, str) else ""
+def _unwrap(raw: Any, keys: tuple[str, ...]) -> str | None:
+    """The text inside a tool result, whatever envelope ``registry.dispatch`` gave it: the bare
+    output, a JSON string, or a JSON object carrying it under one of *keys*. None if there is none."""
+    if not isinstance(raw, str):
+        return None
     try:
-        data = json.loads(text)
-    except (TypeError, ValueError):
-        data = None
+        data = json.loads(raw)
+    except ValueError:
+        return raw
     if isinstance(data, dict):
-        for key in ("output", "stdout", "result", "content", "text"):
-            value = data.get(key)
-            if isinstance(value, str):
-                text = value
-                break
-    elif isinstance(data, str):
-        text = data
-    for line in reversed([line.strip() for line in text.splitlines() if line.strip()]):
-        if line.startswith("/") and " " not in line:
-            return line
-    return ""
+        return next((data[k] for k in keys if isinstance(data.get(k), str)), None)
+    return data if isinstance(data, str) else raw
+
+
+def _first_absolute_path(raw: Any) -> str:
+    """The last absolute path printed in a terminal result (``pwd``)."""
+    text = _unwrap(raw, ("output", "stdout", "result", "content", "text")) or ""
+    return next(
+        (
+            ln.strip()
+            for ln in reversed(text.splitlines())
+            if ln.strip().startswith("/") and " " not in ln.strip()
+        ),
+        "",
+    )
 
 
 def _task_cwd(task_id: str) -> Path | None:
@@ -231,36 +233,15 @@ def _is_numbered(line: str) -> bool:
 def _strip_line_numbers(raw: Any) -> str | None:
     """Turn ``read_file``'s ``LINE|CONTENT`` listing back into plain text.
 
-    ``registry.dispatch`` normalises a handler's result, so what arrives here is often a
-    JSON envelope with the listing under ``content`` (``{"content": "1|line", ...}``)
-    rather than the bare listing. Anything that is not a paginated listing — an error,
-    a refusal, an empty reply — is ``None``: no file text was read, and capture must say
-    so rather than store an error message as if it were the file.
+    Anything that is not a paginated listing (an error, a refusal, an empty reply) is None: no
+    file text was read, and capture must say so rather than store an error as if it were the file.
     """
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    text = raw
-    try:
-        data = json.loads(text)
-    except (TypeError, ValueError):
-        data = None
-    if isinstance(data, dict):
-        for key in ("content", "output", "result", "text"):
-            value = data.get(key)
-            if isinstance(value, str):
-                text = value
-                break
-        else:
-            return None
-    elif isinstance(data, str):
-        text = data
-    if not text.strip():
-        return None
-    lines = text.splitlines()
-    numbered = [line for line in lines if _is_numbered(line)]
+    text = _unwrap(raw, ("content", "output", "result", "text"))
+    lines = (text or "").splitlines()
+    numbered = [ln for ln in lines if _is_numbered(ln)]
     if not numbered or len(numbered) < max(1, int(len(lines) * 0.8)):
         return None
-    out = [line.partition("|")[2] if _is_numbered(line) else line for line in lines]
+    out = [ln.partition("|")[2] if _is_numbered(ln) else ln for ln in lines]
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 
@@ -270,7 +251,12 @@ def _engine_for(base_dir: Path) -> Engine:
     with _engine_lock:
         source = getattr(_ctx, "redact_text", None) if _ctx is not None else None
         if _engine is None or _engine.store.base != base_dir or _redact_source is not source:
-            _engine = Engine(base_dir, redact=_host_redact(), read_remote=_read_remote)
+            _engine = Engine(
+                base_dir,
+                redact=_host_redact(),
+                read_remote=_read_remote,
+                remote_note=lambda: _last_read_error,
+            )
             _redact_source = source
         return _engine
 
@@ -587,35 +573,35 @@ def handle_command(raw_args: str = "", **kwargs: Any) -> str:
     except Exception as exc:
         return f"house-style: plugin data directory unavailable ({exc})."
 
-    try:
-        if sub == "status":
-            return eng.status(root, cwd=cwd, capture_note=NO_REDACTOR)
-        if sub == "scan":
-            if not eng.capture_enabled:
-                return f"house-style: nothing was scanned — {NO_REDACTOR}"
-            scan = eng.scan(root)
-            return (
-                f"Scanned {len(scan.signals)} recorded edit(s) in {root.name}: {_format_counts(scan.counts)}."
-            )
-        if sub == "learn":
-            if not eng.capture_enabled:
-                return f"house-style: nothing was learned — {NO_REDACTOR}"
-            return _learn(root, eng, confirm=False, cwd=cwd)
-        if sub == "learn-confirm":
-            return _learn(root, eng, confirm=True, cwd=cwd)
-        if sub == "reset":
-            return _reset(root, eng, confirmed=False, cwd=cwd)
-        if sub == "reset-confirm":
-            return _reset(root, eng, confirmed=True, cwd=cwd)
-        if sub == "off":
-            eng.store.set_off(eng.store.register_repo(root), True)
-            return f"house-style is off for {root.name}: new edits are not recorded."
-        if sub == "on":
-            eng.store.set_off(eng.store.register_repo(root), False)
-            return f"house-style is on for {root.name}."
-        if sub == "export":
-            return eng.export(root, cwd)
+    def scan() -> str:
+        result = eng.scan(root)
+        return (
+            f"Scanned {len(result.signals)} recorded edit(s) in {root.name}: {_format_counts(result.counts)}."
+        )
+
+    def set_off(off: bool) -> str:
+        eng.store.set_off(eng.store.register_repo(root), off)
+        return f"house-style is {'off' if off else 'on'} for {root.name}" + (
+            ": new edits are not recorded." if off else "."
+        )
+
+    actions = {
+        "status": lambda: eng.status(root, cwd=cwd, capture_note=NO_REDACTOR),
+        "scan": scan,
+        "learn": lambda: _learn(root, eng, confirm=False, cwd=cwd),
+        "learn-confirm": lambda: _learn(root, eng, confirm=True, cwd=cwd),
+        "reset": lambda: _reset(root, eng, confirmed=False, cwd=cwd),
+        "reset-confirm": lambda: _reset(root, eng, confirmed=True, cwd=cwd),
+        "off": lambda: set_off(True),
+        "on": lambda: set_off(False),
+        "export": lambda: eng.export(root, cwd),
+    }
+    if sub not in actions:
         return "Unknown subcommand.\n\n" + _USAGE
+    if sub in ("scan", "learn") and not eng.capture_enabled:
+        return f"house-style: nothing was {'scanned' if sub == 'scan' else 'learned'} — {NO_REDACTOR}"
+    try:
+        return actions[sub]()
     except Exception as exc:  # never raise into the operator's terminal
         logger.debug("house-style: command failed", exc_info=True)
         return f"house-style: {type(exc).__name__}: {exc}"

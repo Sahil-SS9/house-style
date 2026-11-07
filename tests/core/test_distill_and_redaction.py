@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from house_style_core import distill
 from house_style_core.models import EDITED, KEPT, REVERTED, Verdict
-from house_style_core.redaction import fallback_redact, make_redactor, redact_lines
+from house_style_core.redaction import RedactionError, make_redactor, redact_lines
 
 
 def verdict(index: int, status: str = EDITED, path: str = "pkg/module.py") -> Verdict:
@@ -57,56 +59,31 @@ def test_diff_preview_reports_no_change():
     assert distill.diff_preview("a\n", "a\n") == "(no change)"
 
 
-def test_fallback_redaction_masks_common_token_shapes():
-    text = (
-        'key = "sk-abcdefghijklmnopqrstuvwx"\n'
-        "token: ghp_abcdefghijklmnopqrstuvwxyz0123\n"
-        "aws = AKIAIOSFODNN7EXAMPLE\n"
-        'password = "hunter2hunter2"\n'
-        "url = postgres://user:secret@db.example/db\n"
-    )
-    out = fallback_redact(text)
-    assert "sk-abcdefghijklmnop" not in out
-    assert "ghp_abcdefghijkl" not in out
-    assert "AKIAIOSFODNN7EXAMPLE" not in out
-    assert "hunter2hunter2" not in out
-    assert "secret@" not in out
-
-
-def test_fallback_redaction_leaves_ordinary_code_alone():
-    text = "MAX_TOKENS = 100\ndef add(a, b):\n    return a + b\n"
-    assert fallback_redact(text) == text
-
-
-def test_make_redactor_falls_back_when_the_host_redactor_raises():
+def test_make_redactor_refuses_when_the_host_redactor_raises():
     def broken(_text: str) -> str:
         raise RuntimeError("no redactor today")
 
-    redact = make_redactor(broken)
-    assert "sk-abcdefghijklmnopqrstuvwx" not in redact('key = "sk-abcdefghijklmnopqrstuvwx"')
+    with pytest.raises(RedactionError):
+        make_redactor(broken)("key = value")
 
 
-def test_make_redactor_runs_both_layers():
-    calls: list[str] = []
+def test_make_redactor_refuses_a_non_string_result():
+    with pytest.raises(RedactionError):
+        make_redactor(lambda _text: None)("x")  # type: ignore[arg-type, return-value]
 
-    def host(text: str) -> str:
-        calls.append(text)
-        return text.replace("INTERNAL-TOKEN", "[redacted]")
 
-    redact = make_redactor(host)
-    out = redact("a INTERNAL-TOKEN b sk-abcdefghijklmnopqrstuvwx")
-    assert calls, "the host redactor must be consulted"
-    assert "INTERNAL-TOKEN" not in out
-    assert "sk-abcdefghijkl" not in out
+def test_make_redactor_returns_the_host_result():
+    assert make_redactor(lambda t: t.replace("INTERNAL-TOKEN", "[redacted]"))("a INTERNAL-TOKEN b") == (
+        "a [redacted] b"
+    )
 
 
 def test_redact_lines_preserves_line_count_for_single_line_secrets():
-    lines = ['token = "sk-abcdefghijklmnopqrstuvwx"', "other line"]
-    redacted = redact_lines(lines, make_redactor())
-    assert redacted is not None
-    assert len(redacted) == 2
-    assert "sk-abcdefghijkl" not in redacted[0]
-    assert redacted[1] == "other line"
+    secret = "sk-" + "abcdefghijklmnopqrstuvwx"
+    redacted = redact_lines(
+        [f'token = "{secret}"', "other line"], make_redactor(lambda t: t.replace(secret, "[redacted]"))
+    )
+    assert redacted == ['token = "[redacted]"', "other line"]
 
 
 # -- parsing the model's reply -----------------------------------------------

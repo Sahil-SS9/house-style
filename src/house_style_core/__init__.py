@@ -44,7 +44,7 @@ from .models import (
     content_hash,
     utc_now,
 )
-from .redaction import Redactor, fallback_redact, make_redactor, redact_lines
+from .redaction import RedactionError, Redactor, make_redactor, redact_lines
 from .store import Store, clear_all, repo_key
 from .v4a import Hunk, ParsedPatch, parse_patch
 
@@ -79,7 +79,7 @@ __all__ = [
     "content_hash",
     "contextfile",
     "diff_preview",
-    "fallback_redact",
+    "RedactionError",
     "find_all_exact",
     "find_anchored",
     "find_exact",
