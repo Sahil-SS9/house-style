@@ -260,6 +260,7 @@ class Engine:
                     occurrences=len(starts),
                     session_id=session_id,
                     turn_id=turn_id,
+                    task_id=task_id,
                 )
                 self.store.append(key, signal)
                 signals.append(signal)
@@ -271,27 +272,22 @@ class Engine:
         return Capture(True, signals=signals, skipped=skipped)
 
     # -- classification ---------------------------------------------------
-    def _reader(self, repo_root: Path):
-        def read(rel_path: str) -> str | None:
-            try:
-                path = (repo_root / rel_path).resolve()
-                stat = path.stat()
-            except OSError:
-                return None
-            cached = self._read_cache.get(rel_path)
-            if cached is not None and cached[0] == stat.st_mtime:
-                return cached[1]
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                return None
-            # Redact the same way the stored blocks were redacted, so a secret the
-            # user left untouched cannot read as an edit.
-            value = self.redactor(text)
-            self._read_cache[rel_path] = (stat.st_mtime, value)
-            return value
-
-        return read
+    def _text_for(self, signal: Signal, root: Path, cache: dict[tuple[str, str], str | None]) -> str | None:
+        """The file's text for comparison: host disk first, then the task's backend."""
+        key = (signal.path, signal.task_id)
+        if key in cache:
+            return cache[key]
+        value: str | None = None
+        try:
+            value = (root / signal.path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            value = None
+        if value is None and self.read_remote is not None:
+            value = self._read_remote(signal.path, signal.task_id, str(root / signal.path))
+        if value is not None:
+            value = self.redactor(value)  # same scrub as the stored blocks
+        cache[key] = value
+        return value
 
     def scan(self, repo_root: str | Path) -> Scan:
         root = Path(repo_root).resolve()
@@ -300,18 +296,16 @@ class Engine:
         verdicts: list[Verdict] = []
         unjudged: list[str] = []
         if signals:
-            read = self._reader(root)
-            cache: dict[str, str | None] = {}
+            cache: dict[tuple[str, str], str | None] = {}
             for signal in signals:
-                if signal.path not in cache:
-                    try:
-                        cache[signal.path] = read(signal.path)
-                    except RedactionError:
-                        cache[signal.path] = None
-                        unjudged.append(signal.path)
-                if signal.path in unjudged:
+                try:
+                    text = self._text_for(signal, root, cache)
+                except RedactionError:
+                    text = None
+                    unjudged.append(signal.path)
+                if text is None and signal.path in unjudged:
                     continue
-                verdicts.append(classify_text(cache[signal.path], signal))
+                verdicts.append(classify_text(text, signal))
         return Scan(root, key, signals, verdicts, unjudged)
 
     def repo_for(self, path: str | Path) -> Path | None:

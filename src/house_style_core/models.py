@@ -68,6 +68,7 @@ class Signal:
     occurrences: int = 1
     session_id: str = ""
     turn_id: str = ""
+    task_id: str = ""
     v: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -90,6 +91,7 @@ class Signal:
             "occurrences": self.occurrences,
             "session_id": self.session_id,
             "turn_id": self.turn_id,
+            "task_id": self.task_id,
         }
 
     @classmethod
@@ -114,6 +116,7 @@ class Signal:
             occurrences=int(data.get("occurrences") or 1),
             session_id=str(data.get("session_id", "")),
             turn_id=str(data.get("turn_id", "")),
+            task_id=str(data.get("task_id", "")),
             v=int(data.get("v") or 1),
         )
 

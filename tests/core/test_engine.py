@@ -451,3 +451,28 @@ def test_unreadable_files_are_reported_across_projects(tmp_path: Path):
     text = eng.status(repo)
     assert "could not read on backend docker-2" in text
     assert "in other" in text
+
+
+def test_a_remote_edit_is_judged_through_its_own_backend(tmp_path: Path):
+    """The comparison read must use the task too, or a remote edit reads as reverted."""
+    repo = make_repo(tmp_path / "repo")
+    reads: list[tuple[str, str]] = []
+
+    def read_remote(raw_path: str, task_id: str, abs_path: str = "") -> str | None:
+        reads.append((raw_path, task_id))
+        return "value = 7\n"
+
+    eng = engine(tmp_path, read_remote=read_remote)
+    result = eng.capture(
+        repo_root=repo,
+        file_path=repo / "container-only" / "y.py",
+        raw_path="/workspace/pkg/y.py",
+        rel_path="pkg/y.py",
+        tool="write_file",
+        blocks=[Block(["value = 7"], raw="value = 7\n")],
+        task_id="docker-4",
+    )
+    assert result.stored, result.reason
+    scan = eng.scan(repo)
+    assert scan.counts[KEPT] == 1
+    assert ("pkg/y.py", "docker-4") in reads
