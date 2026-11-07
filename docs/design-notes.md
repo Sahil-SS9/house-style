@@ -18,12 +18,23 @@ One row per introduced block, appended to
 | `before_ctx` / `after_ctx` | up to three lines either side, redacted, used as fences |
 | `pre_hunk` | for a replace patch, the text it replaced |
 | `read_via` | `host-disk` or `tool-surface` |
+| `task_id` | the backend task that made the edit, used to read the file back for comparison |
 | `occurrence` / `occurrences` | which replaced copy this is, and how many there were |
 | `start_line`, `total_lines`, `size` | position and size at capture time |
 
 The `hunk` is the block, not the file, for a reason: a patch that changes one line
 should not re-send a 400-line file, and the class of edit we care about ("did the user
 accept this block?") is local.
+
+## Remote backends
+
+A file the host cannot see is read through `ctx.dispatch_tool("read_file", …,
+task_id=<the hook's task id>)`: the registry hands `task_id` to the read handler, which
+resolves relative paths against that task's working directory and reads through its
+environment. The repository root for such an edit is that task's directory too (asked
+for once per task via the terminal tool), so capture and the commands agree. The same
+task-scoped read is used when comparing the file later, so a Docker edit is judged
+rather than reported as reverted because the host has no such file.
 
 ## Landing check
 
@@ -77,11 +88,14 @@ section.
 
 ## Redaction
 
-The host's `ctx.redact_text()` runs first, at its strongest setting. The core then
-applies its own narrow floor (known token prefixes, private-key blocks,
-credential-shaped assignments, URL userinfo) so a host scrubbing pass that misses a
-shape cannot result in raw text on disk. At classification time the file's current text
-is redacted the same way before comparing.
+The host's `ctx.redact_text()` runs first, at its strongest setting, honouring
+`security.redact_secrets`. The core then applies its own narrow floor (known token
+prefixes, private-key blocks, credential-shaped assignments, URL userinfo) so a host
+pass that misses a shape cannot put raw text on disk.
+
+`ctx.redact_text()` raises on internal failure. That propagates: the edit is not stored
+at all, and an edit whose file cannot be scrubbed for comparison is left unjudged and
+reported as such, never silently labelled kept or reverted.
 
 ## What it deliberately does not do
 

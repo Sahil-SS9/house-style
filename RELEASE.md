@@ -6,9 +6,11 @@ catalog entry and the release itself are the owner's calls.
 ## 0. Prerequisite: the redaction seam
 
 house-style records nothing until the target Hermes exposes `ctx.redact_text()`. That
-method does not exist in mainline yet — it is being drafted as a small core PR for the
-share plugin. **Do not submit the catalog entry before it merges.** On a build without
-it the plugin loads and refuses, which is the correct behaviour, not a bug.
+method is not in mainline yet; it is open on `feat/plugin-redact-text` (also drafted for
+the share plugin). **Do not submit the catalog entry before it merges.** On a build
+without it the plugin loads and refuses, which is the correct behaviour, not a bug. The
+method raises on internal failure; house-style treats that as a refusal to store, so a
+broken scrubber can never put raw text on disk.
 
 ## 1. Local gates (must all pass on the commit you intend to publish)
 
@@ -68,8 +70,10 @@ cp -r /tmp/pin "$HERMES_HOME/plugins/house-style"
 - [ ] A repo that already has `AGENTS.md` keeps it, with the block added; a repo that
       already has `.hermes.md` gets the block there and no new `AGENTS.md`.
 - [ ] Multi-file V4A patch and `replace_all` both produce one signal per hunk/occurrence.
-- [ ] A remote backend either captures through `read_file` or is named per backend in
-      `status`.
+- [ ] A remote backend captures through `read_file` in the task that wrote the file
+      (verified with `terminal.backend: docker`: the signal records `read_via:
+      tool-surface`, the root is the container's directory, and the verdict is `kept`).
+      A backend that cannot be read is named in `status` with the host's own answer.
 - [ ] Live setup untouched: `plugins/` listing unchanged, no `plugins.enabled` write, no
       config edit in the operator's own home.
 

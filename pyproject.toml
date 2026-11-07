@@ -1,6 +1,6 @@
 [project]
 name = "house-style"
-version = "0.1.0"
+version = "0.3.0"
 description = "Learn a project's house style from how you correct an agent's edits"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -28,9 +28,9 @@ reads the same `AGENTS.md`.
 
 ## Requirements
 
-house-style redacts through the host with `ctx.redact_text()`, a plugin seam that is
-not in mainline Hermes yet (it is being drafted upstream for the share plugin too). On a
-build without it the plugin loads, records nothing, and says so:
+house-style redacts through the host with `ctx.redact_text()`, a plugin seam that is not
+in mainline Hermes yet (it is open as `feat/plugin-redact-text`, drafted for the share
+plugin too). On a build without it the plugin loads, records nothing, and says so:
 
 ```
 /house-style status
@@ -38,7 +38,9 @@ build without it the plugin loads, records nothing, and says so:
 ```
 
 There is no fallback to Hermes internals: the plugin uses only documented `ctx`
-methods, and would rather do nothing than reach inside the host.
+methods, and would rather do nothing than reach inside the host. If the host redactor
+itself raises, the edit is not stored at all — and an edit whose file cannot be scrubbed
+for comparison is left unjudged rather than reported as kept or reverted.
 
 ## Install
 
@@ -95,13 +97,12 @@ so it is read through the `read_file` tool instead, and `status` shows how many 
 came from each route. A backend that cannot be read at all is named in `status` with the
 session it belongs to — never a silent gap.
 
-Known limit, measured on `26874afd`: in a `post_tool_call` hook, `ctx.session_cwd()`
-answers with the directory the CLI was launched from rather than the backend's working
-directory, and `ctx.dispatch_tool()` carries no task scope, so a read of a container
-file often cannot be aimed at the right environment. house-style then records the edit
-as "could not read" for that backend rather than guessing. The fix belongs in the host:
-a session-scoped working directory that hooks can read, or a task-scoped `read_file`
-dispatch (see the seam note in the lane evidence).
+The read runs in the task that made the edit (`ctx.dispatch_tool(..., task_id=...)`
+reaches the handler's task-aware read), and the repository root for such an edit comes
+from that task's own working directory, asked for once per task. When a backend still
+cannot be read — a task whose environment is gone, or one that refuses the read — the
+edit is recorded as "could not read on backend …" with the host's own answer in
+`status`, never a silent gap.
 
 Skipped, with the reason in debug logs: files outside a git repository, binary files,
 files over 256 KB, secret-like names (`.env`, `*.pem`, `id_rsa*`, `credentials*` and

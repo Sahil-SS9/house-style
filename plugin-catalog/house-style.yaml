@@ -1,7 +1,7 @@
 name: house-style
 repo: https://github.com/Sahil-SS9/house-style
 sha: e9bd1f3bee9f25d0d8459d8a6fae27ce9a053f0a
-version: "0.2.0"
+version: "0.3.0"
 description: >-
   Learns a project's house style from how you correct the agent's edits. Every
   write_file and patch records the block it introduced (including every hunk of a
@@ -17,8 +17,8 @@ description: >-
   anything you wrote; off/on stop or resume recording for one project; export prints the
   rules. Disclosure — registers post_tool_call (for write_file and patch only) and
   on_session_start; reads those tools' arguments and reads back the files they just
-  wrote, from the host filesystem or through the read_file tool when the file is on a
-  remote backend, inside a git repository only, skipping files over 256 KB, binary
+  wrote, from the host filesystem or, on a remote backend, through the read_file tool in
+  the task that wrote them, inside a git repository only, skipping files over 256 KB, binary
   files, secret-like names (.env, *.pem, id_rsa*, credentials*) and .git internals;
   stores redacted before/after pairs (repository-relative path, hash, up to 200 lines
   per block, up to 400 rows and 512 KB per repository) in plugin-data/house-style; writes
