@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from . import contextfile, distill
 from .filters import (
@@ -95,6 +96,7 @@ class Engine:
         *,
         redact: Redactor | None = None,
         read_remote: Callable[[str, str, str], str | None] | None = None,
+        remote_note: Callable[[], str] | None = None,
         max_file_bytes: int = MAX_FILE_BYTES,
         strict_redaction: bool = True,
     ) -> None:
@@ -102,6 +104,7 @@ class Engine:
         self.redact = redact
         self.redactor = make_redactor(redact, strict=strict_redaction)
         self.read_remote = read_remote
+        self.remote_note = remote_note
         self.max_file_bytes = max_file_bytes
         self._read_cache: dict[str, tuple[float, str | None]] = {}
 
@@ -431,7 +434,9 @@ class Engine:
         # every other one we track: a Docker or SSH session can be filed under the
         # directory it was launched from, and a silent drop there would be a gap.
         unreadable: list[tuple[str, str, str]] = []
+        unreadable_rows: list[dict[str, Any]] = []
         for row in self.store.unreadable(key):
+            unreadable_rows.append(row)
             unreadable.append(("", str(row.get("task") or "local"), str(row.get("path") or "?")))
         for other_key, _ in self.store.tracked_repos():
             if other_key == key:
@@ -439,6 +444,7 @@ class Engine:
             other_root = str(self.store.meta(other_key).get("repo") or other_key)
             label = Path(other_root).name or other_root
             for row in self.store.unreadable(other_key):
+                unreadable_rows.append(row)
                 unreadable.append((label, str(row.get("task") or "local"), str(row.get("path") or "?")))
         if unreadable:
             grouped: dict[tuple[str, str], list[str]] = {}
@@ -448,6 +454,9 @@ class Engine:
                 shown = ", ".join(paths[-3:])
                 where = f" in {label}" if label else ""
                 lines.append(f"  could not read on backend {backend}{where}: {len(paths)} file(s): {shown}")
+            reasons = [str(row.get("why") or "") for row in unreadable_rows if row.get("why")]
+            if reasons:
+                lines.append(f"  last read error: {reasons[-1][:300]}")
 
         if scan.unjudged:
             names = ", ".join(sorted(set(scan.unjudged))[:3])

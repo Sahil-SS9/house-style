@@ -67,6 +67,9 @@ _session_cwds: dict[str, str] = {}
 #: Working directory each backend task reported, keyed by task id.
 _task_cwds: dict[str, str] = {}
 
+#: Last remote-read failure, so status can say what the host answered.
+_last_read_error: str = ""
+
 
 # ---------------------------------------------------------------------------
 # host seams — public ctx methods only
@@ -137,21 +140,28 @@ def _read_remote(raw_path: str, task_id: str, abs_path: str = "") -> str | None:
     through that backend's environment. Without it the read runs against whatever
     environment the default task has — a host one, for a Docker or SSH session.
     """
+    global _last_read_error
     dispatch = getattr(_ctx, "dispatch_tool", None)
     if not callable(dispatch):
+        _last_read_error = "this build has no ctx.dispatch_tool"
         return None
     tid = task_id or "default"
+    attempts: list[str] = []
     for candidate in (raw_path, abs_path):
         if not candidate:
             continue
         try:
             raw = dispatch("read_file", {"path": candidate, "limit": TOOL_READ_LINES}, task_id=tid)
-        except Exception:
-            logger.debug("house-style: read_file dispatch failed", exc_info=True)
+        except Exception as exc:
+            attempts.append(f"{candidate}: dispatch raised {type(exc).__name__}: {exc}")
             continue
         text = _strip_line_numbers(raw)
         if text is not None:
+            _last_read_error = ""
             return text
+        preview = " ".join(str(raw).split())[:160]
+        attempts.append(f"{candidate}: {preview}")
+    _last_read_error = " | ".join(attempts) or "no path to try"
     return None
 
 
