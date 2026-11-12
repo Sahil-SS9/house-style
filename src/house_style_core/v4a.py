@@ -34,7 +34,19 @@ _UPDATE = re.compile(r"^\*\*\*\s*Update\s+File:\s*(.+?)\s*$")
 _ADD = re.compile(r"^\*\*\*\s*Add\s+File:\s*(.+?)\s*$")
 _DELETE = re.compile(r"^\*\*\*\s*Delete\s+File:\s*(.+?)\s*$")
 _MOVE = re.compile(r"^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$")
-_HINT = re.compile(r"^@@\s*(.*?)\s*@@\s*$")
+
+
+def is_hint(line: str) -> bool:
+    """A V4A ``@@ context hint @@`` line.
+
+    No regular expression: this runs on every line of every patch inside a hook that blocks the
+    turn, and the patch text comes from the model. ``^@@\\s*(.*?)\\s*@@\\s*$`` backtracked for
+    seconds on one long ``@@`` line with no closing ``@@``; these string checks are linear.
+    """
+    if not line.startswith("@@"):
+        return False
+    body = line.rstrip()
+    return len(body) >= 4 and body.endswith("@@")
 
 
 @dataclass
@@ -102,7 +114,7 @@ def parse_patch(text: str) -> ParsedPatch:
             result.skipped.append(f"moved {match.group(1).strip()} to {match.group(2).strip()}")
             path = None
             continue
-        if _HINT.match(line):
+        if is_hint(line):
             hunk = _flush(result.hunks, hunk)
             continue
         if path is None:

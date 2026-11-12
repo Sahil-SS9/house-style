@@ -7,6 +7,7 @@ read a file the host cannot see, *who* redacts, and *who* calls the model.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,6 +86,26 @@ class Scan:
         for verdict in self.verdicts:
             out[verdict.status] = out.get(verdict.status, 0) + 1
         return out
+
+
+def _write_context_file(path: Path, text: str) -> None:
+    """Write the context file in place, never through a symlink.
+
+    A symlinked ``AGENTS.md`` can point anywhere, including outside the repository, so the
+    write refuses it rather than following it. ``O_NOFOLLOW`` closes the gap between a check
+    and the open as well: a file swapped for a link after staging is refused, not followed.
+    """
+    if path.is_symlink():
+        raise ValueError(f"{path.name} is a symlink; house-style will not write through it")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o644)
+    except OSError as exc:
+        if path.is_symlink():
+            raise ValueError(f"{path.name} is a symlink; house-style will not write through it") from exc
+        raise
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
 
 
 class Engine:
@@ -365,7 +386,7 @@ class Engine:
             existing = None
         rendered = contextfile.render(existing, learned, self.store.last_generated(key))
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(rendered, encoding="utf-8")
+        _write_context_file(target_path, rendered)
         self.store.set_last_generated(key, learned)
         self.store.clear_pending(key)
         return target_path
@@ -388,7 +409,7 @@ class Engine:
         self.store.clear_unreadable(key)
         if target.exists:
             existing = target.path.read_text(encoding="utf-8")
-            target.path.write_text(contextfile.render(existing, [], last), encoding="utf-8")
+            _write_context_file(target.path, contextfile.render(existing, [], last))
         self.store.set_last_generated(key, [])
         return signals, len(kept), "done"
 
